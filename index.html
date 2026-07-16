@@ -626,6 +626,8 @@ function worldMapBgSvg(){
   return `<svg class="world-bg" viewBox="30.767 241.591 784.077 458.627" preserveAspectRatio="xMidYMid meet" aria-hidden="true">${WORLD_MAP_PATHS}</svg>`;
 }
 
+let GLOBAL_EVENTS_BOUND = false;
+
 async function init(){
   const tpl = document.getElementById('worldMapPaths');
   if(tpl && tpl.content){
@@ -633,27 +635,42 @@ async function init(){
     if(innerSvg) WORLD_MAP_PATHS = innerSvg.innerHTML;
   }
 
-  // A interface arranca sempre com os dados locais. A sincronização nunca pode
-  // bloquear os botões, sobretudo quando não há rede ou o GitHub está lento.
-  await loadSyncSettings();
-  state.trips = await getTripsIndex();
-  if(state.trips.length){
-    state.currentTripId = state.trips[0].id;
-    state.currentData = ensureShape(await getTripData(state.currentTripId));
+  // Liga primeiro a interface. Nenhuma leitura local, migração ou chamada de rede
+  // pode impedir os cliques depois de atualizar o ficheiro e recarregar a página.
+  try { bindGlobalEvents(); } catch(err) { console.error('Falha ao ligar eventos globais:', err); }
+  try { renderHeader(); renderTabs(); renderCurrentTab(); } catch(err) { console.error('Falha no desenho inicial:', err); }
+
+  // Carrega os dados locais de forma isolada. Se um registo antigo/corrompido falhar,
+  // a interface continua ativa e o utilizador pode abrir definições ou importar dados.
+  try {
+    await loadSyncSettings();
+  } catch(err) {
+    console.error('Falha ao ler definições de sincronização:', err);
+    setSyncStatus('Não foi possível ler as definições locais; a app continua disponível.');
   }
 
-  renderHeader();
-  renderTabs();
-  renderCurrentTab();
-  bindGlobalEvents();
+  try {
+    state.trips = (await getTripsIndex()) || [];
+    if(state.trips.length){
+      state.currentTripId = state.trips[0].id;
+      state.currentData = ensureShape(await getTripData(state.currentTripId));
+    }
+  } catch(err) {
+    console.error('Falha ao carregar dados locais:', err);
+    state.trips = Array.isArray(state.trips) ? state.trips : [];
+    state.currentTripId = null;
+    state.currentData = null;
+    setSyncStatus('Erro ao carregar os dados locais; podes importar uma cópia de segurança.');
+  }
 
-  // Atualiza em segundo plano e volta a desenhar apenas quando terminar.
+  try { renderHeader(); renderTabs(); renderCurrentTab(); } catch(err) { console.error('Falha ao redesenhar dados locais:', err); }
+
+  // A sincronização corre sempre depois de a app estar utilizável.
   if(syncConfigured() && navigator.onLine){
-    pullFromGitHub().then(ok=>{
+    Promise.resolve().then(()=>pullFromGitHub()).then(ok=>{
       if(ok){
-        renderHeader();
-        renderTabs();
-        renderCurrentTab();
+        try { renderHeader(); renderTabs(); renderCurrentTab(); }
+        catch(err) { console.error('Falha ao redesenhar após sincronização:', err); }
       }
     }).catch(err=>{
       console.error(err);
@@ -663,6 +680,8 @@ async function init(){
 }
 
 function bindGlobalEvents(){
+  if(GLOBAL_EVENTS_BOUND) return;
+  GLOBAL_EVENTS_BOUND = true;
   document.getElementById('newTripBtn').addEventListener('click', ()=>openTripModal('create'));
   document.getElementById('editTripBtn').addEventListener('click', ()=>openTripModal('edit'));
   document.getElementById('tripSelect').addEventListener('change', async (e)=>{
@@ -1781,7 +1800,15 @@ function openExpenseModal(mode, id){
   });
 }
 
-init();
+function bootApp(){
+  init().catch(err=>{
+    console.error('Erro inesperado no arranque:', err);
+    try { bindGlobalEvents(); } catch(_) {}
+    try { setSyncStatus('A app arrancou com limitações, mas os controlos continuam disponíveis.'); } catch(_) {}
+  });
+}
+if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bootApp, {once:true});
+else bootApp();
 </script>
 </body>
 </html>
