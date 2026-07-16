@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Diário de Viagem</title>
+<title>Diário de Viagem V2</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
@@ -434,11 +434,22 @@ async function githubPut(body){
 }
 
 let pushTimer = null;
-function schedulePush(){
+let localRevision = 0;
+let syncRunning = false;
+let syncRequestedWhileBusy = false;
+function modalIsOpen(){ return !!document.querySelector('#modalRoot .modal-overlay'); }
+function schedulePush(delay=4000){
   if(!syncConfigured() || !navigator.onLine) return;
   clearTimeout(pushTimer);
-  pushTimer = setTimeout(()=>{ pushToGitHub(); }, 1200);
+  pushTimer = setTimeout(()=>{
+    if(modalIsOpen() || document.activeElement?.matches('input, textarea, select')){
+      schedulePush(2500);
+      return;
+    }
+    pushToGitHub();
+  }, delay);
 }
+
 
 function mergeRecords(remoteList, localList){
   const merged = new Map();
@@ -484,6 +495,14 @@ async function buildLocalSyncPayload(){
 async function pushToGitHub(){
   if(!syncConfigured()) return false;
   if(!navigator.onLine){ setSyncStatus('Modo offline · sincronizar mais tarde'); return false; }
+  if(modalIsOpen() || document.activeElement?.matches('input, textarea, select')){
+    setSyncStatus('Alterações guardadas · sincronização em espera');
+    schedulePush(2500);
+    return false;
+  }
+  if(syncRunning){ syncRequestedWhileBusy = true; return false; }
+  syncRunning = true;
+  const revisionAtStart = localRevision;
   setSyncStatus('A sincronizar…');
   try{
     let localPayload = await buildLocalSyncPayload();
@@ -515,12 +534,16 @@ async function pushToGitHub(){
         const putJson = await putRes.json();
         state.sync.sha = putJson.content.sha;
         state.sync.lastSyncedAt = new Date().toISOString();
-        state.trips = payload.trips;
-        await saveTripsIndex(payload.trips);
-        for(const [id,data] of Object.entries(payload.tripsData)) await saveTripData(id, data);
-        if(state.currentTripId && payload.tripsData[state.currentTripId]) state.currentData = payload.tripsData[state.currentTripId];
+        // Nunca substituir o estado que o utilizador está a editar. O resultado remoto
+        // é guardado apenas quando não houve novas alterações durante esta sincronização.
+        if(localRevision === revisionAtStart && !modalIsOpen()){
+          state.trips = payload.trips;
+          await saveTripsIndex(payload.trips);
+          for(const [id,data] of Object.entries(payload.tripsData)) await saveTripData(id, data);
+        }
         await saveSyncSettings();
-        setSyncStatus('Sincronizado às '+new Date().toLocaleTimeString('pt-PT'));
+        setSyncStatus(localRevision === revisionAtStart ? 'Sincronizado às '+new Date().toLocaleTimeString('pt-PT') : 'Novas alterações guardadas · nova sincronização pendente');
+        if(localRevision !== revisionAtStart) schedulePush(1800);
         return true;
       }
 
@@ -538,6 +561,12 @@ async function pushToGitHub(){
     console.error(err);
     setSyncStatus('Falha ao sincronizar: '+err.message);
     return false;
+  } finally {
+    syncRunning = false;
+    if(syncRequestedWhileBusy){
+      syncRequestedWhileBusy = false;
+      schedulePush(1800);
+    }
   }
 }
 async function pullFromGitHub(){
@@ -668,7 +697,7 @@ async function init(){
   // A sincronização corre sempre depois de a app estar utilizável.
   if(syncConfigured() && navigator.onLine){
     Promise.resolve().then(()=>pullFromGitHub()).then(ok=>{
-      if(ok){
+      if(ok && !modalIsOpen()){
         try { renderHeader(); renderTabs(); renderCurrentTab(); }
         catch(err) { console.error('Falha ao redesenhar após sincronização:', err); }
       }
@@ -705,7 +734,7 @@ function bindGlobalEvents(){
   initTheme();
   document.getElementById('themeBtn').addEventListener('click', toggleTheme);
   updateNetworkStatus();
-  window.addEventListener('online', ()=>{ updateNetworkStatus(); if(syncConfigured()) pushToGitHub(); });
+  window.addEventListener('online', ()=>{ updateNetworkStatus(); if(syncConfigured()) schedulePush(1800); });
   window.addEventListener('offline', updateNetworkStatus);
   setSyncStatus(syncConfigured() ? (state.sync.statusMsg || 'Sincronização ativa') : 'Só neste dispositivo — liga o 🔗 Sincronizar para partilhar');
 }
@@ -761,7 +790,7 @@ function openSyncModal(){
       statusEl.textContent = state.sync.statusMsg;
     }
     renderHeader();
-    renderCurrentTab();
+    // Não redesenhar o conteúdo principal enquanto este modal está aberto.
   });
 }
 
@@ -1621,16 +1650,18 @@ function renderOrcamento(el){
 /* ============================= PERSIST HELPERS ============================= */
 async function persistCurrentTrip(){
   if(!state.currentTripId) return;
+  localRevision++;
   await saveTripData(state.currentTripId, state.currentData);
   setSyncStatus(syncConfigured() ? (navigator.onLine?'Alterações guardadas · sincronização pendente':'Modo offline · sincronizar mais tarde') : 'Guardado neste dispositivo');
-  schedulePush();
+  schedulePush(4000);
 }
 async function updateTripIndexEntry(){
   const idx = state.trips.findIndex(t=>t.id===state.currentTripId);
   if(idx>-1){
     state.trips[idx] = {...state.trips[idx], ...pickIndexFields(state.currentData.info)};
+    localRevision++;
     await saveTripsIndex(state.trips);
-    schedulePush();
+    schedulePush(4000);
   }
 }
 function pickIndexFields(info){
@@ -1639,11 +1670,16 @@ function pickIndexFields(info){
 
 /* ============================= MODALS ============================= */
 function openModal(html){
+  clearTimeout(pushTimer);
   const root = document.getElementById('modalRoot');
   root.innerHTML = `<div class="modal-overlay" id="modalOverlay"><div class="modal">${html}</div></div>`;
   document.getElementById('modalOverlay').addEventListener('click', (e)=>{ if(e.target.id==='modalOverlay') closeModal(); });
 }
-function closeModal(){ document.getElementById('modalRoot').innerHTML=''; state.modalPendingXY = null; }
+function closeModal(){
+  document.getElementById('modalRoot').innerHTML='';
+  state.modalPendingXY = null;
+  if(syncConfigured()) schedulePush(1800);
+}
 
 function openTripModal(mode){
   const editing = mode==='edit';
