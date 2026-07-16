@@ -894,7 +894,7 @@ function normalizeImportedTrip(tripData){
   }));
   tripData.expenses = (tripData.expenses||[]).map(e=>({
     id: e.id || uid(), date: e.date||'', categoryKey: CATEGORIES.some(c=>c.key===e.categoryKey) ? e.categoryKey : 'outros',
-    description: e.description||'', amount: Number(e.amount)||0, locationId: e.locationId||null,
+    description: e.description||'', amount: Number(e.amount)||0, locationId: e.locationId||null, bookingId: e.bookingId||null,
     paidBy: e.paidBy||null, splitWith: Array.isArray(e.splitWith) ? e.splitWith : [],
   }));
   tripData.bookings = (tripData.bookings||[]).map(b=>({
@@ -910,9 +910,11 @@ function normalizeImportedTrip(tripData){
     const found = (tripData.budgetCategories||[]).find(b=>b.key===key);
     return { key, planned: found ? Number(found.planned)||0 : 0 };
   });
-  // reconcile locationId references that don't match any imported location
+  // reconcile locationId/bookingId references that don't match any imported record
   const locIds = new Set(tripData.locations.map(l=>l.id));
   tripData.expenses.forEach(e=>{ if(e.locationId && !locIds.has(e.locationId)) e.locationId = null; });
+  const bookingIds = new Set(tripData.bookings.map(b=>b.id));
+  tripData.expenses.forEach(e=>{ if(e.bookingId && !bookingIds.has(e.bookingId)) e.bookingId = null; });
   const peopleIds = new Set(tripData.people.map(p=>p.id));
   tripData.expenses.forEach(e=>{
     if(e.paidBy && !peopleIds.has(e.paidBy)) e.paidBy = null;
@@ -1211,7 +1213,8 @@ function renderRoteiro(el){
 function renderBookingTimelineItem(b){
   const c=BOOKING_CATEGORIES.find(x=>x.key===b.category)||BOOKING_CATEGORIES[4];
   const where=bookingLocationText(b);
-  return `<div class="loc-item"><div class="loc-pin-num" style="background:var(--teal)">${c.icon}</div><div class="loc-body"><div class="name">${b.timeFrom?`<span style="font-family:var(--font-mono);color:var(--gold);font-size:12.5px;margin-right:6px">${escapeHtml(b.timeFrom)}</span>`:''}${escapeHtml(b.provider||c.label)}${b.flightNumber?` · ${escapeHtml(b.flightNumber)}`:''}</div>${where?`<div class="notes">${escapeHtml(where)}${b.timeTo?` · chegada ${escapeHtml(b.timeTo)}`:''}</div>`:''}${b.code?`<div class="spend">Reserva: ${escapeHtml(b.code)}</div>`:''}</div><div class="loc-actions"><button class="icon-btn" title="Editar" onclick="openBookingModal('edit','${b.id}')">✎</button></div></div>`;
+  const spend = state.currentData.expenses.filter(e=>e.bookingId===b.id).reduce((s,e)=>s+Number(e.amount||0),0);
+  return `<div class="loc-item"><div class="loc-pin-num" style="background:var(--teal)">${c.icon}</div><div class="loc-body"><div class="name">${b.timeFrom?`<span style="font-family:var(--font-mono);color:var(--gold);font-size:12.5px;margin-right:6px">${escapeHtml(b.timeFrom)}</span>`:''}${escapeHtml(b.provider||c.label)}${b.flightNumber?` · ${escapeHtml(b.flightNumber)}`:''}</div>${where?`<div class="notes">${escapeHtml(where)}${b.timeTo?` · chegada ${escapeHtml(b.timeTo)}`:''}</div>`:''}${b.code?`<div class="spend">Reserva: ${escapeHtml(b.code)}</div>`:''}${spend>0?`<div class="spend">${fmtMoney(spend, state.currentData.info.currency)} gastos</div>`:''}</div><div class="loc-actions"><button class="icon-btn" title="Editar" onclick="openBookingModal('edit','${b.id}')">✎</button></div></div>`;
 }
 
 function renderLocItem(loc){
@@ -1304,7 +1307,7 @@ function renderBookingTicket(b){
   const date=b.dateFrom?fmtDateShort(b.dateFrom):'Sem data'; const where=bookingLocationText(b);
   return `<div class="ticket"><div class="cat-chip" style="background:#C9A24D22;border:1px solid #C9A24D55">${c.icon}</div><div class="info"><div class="desc">${escapeHtml(b.provider||c.label)}${b.flightNumber?` · ${escapeHtml(b.flightNumber)}`:''}${b.code?` <span style="color:var(--text-dim);font-family:var(--font-mono);font-size:12px">· ${escapeHtml(b.code)}</span>`:''}</div><div class="meta">${c.label} · ${date}${b.timeFrom?' · '+escapeHtml(b.timeFrom):''}${b.timeTo?' → '+escapeHtml(b.timeTo):''}${where?' · '+escapeHtml(where):''}${b.flightStatus?' · '+escapeHtml(b.flightStatus):''}</div></div>${b.link?`<a href="${escapeHtml(b.link)}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-ghost">Abrir ↗</a>`:''}<div class="actions"><button class="icon-btn" title="Editar" onclick="openBookingModal('edit','${b.id}')">✎</button><button class="icon-btn" title="Eliminar" onclick="deleteBooking('${b.id}')">🗑</button></div></div>`;
 }
-function deleteBooking(id){markDeleted('bookings', id);state.currentData.bookings=state.currentData.bookings.filter(b=>b.id!==id);persistCurrentTrip();renderCurrentTab();}
+function deleteBooking(id){markDeleted('bookings', id);state.currentData.bookings=state.currentData.bookings.filter(b=>b.id!==id);state.currentData.expenses.forEach(e=>{ if(e.bookingId===id) e.bookingId = null; });persistCurrentTrip();renderCurrentTab();}
 function locationOptions(selected){return `<option value="">Sem local associado</option>`+state.currentData.locations.map(l=>`<option value="${l.id}" ${selected===l.id?'selected':''}>${escapeHtml(l.name)}</option>`).join('');}
 const AIRLINE_NAMES={TP:'TAP Air Portugal',FR:'Ryanair',U2:'easyJet',EZY:'easyJet',LH:'Lufthansa',BA:'British Airways',IB:'Iberia',VY:'Vueling',KL:'KLM',AF:'Air France',LX:'SWISS',EK:'Emirates',QR:'Qatar Airways',TK:'Turkish Airlines',W6:'Wizz Air',S4:'Azores Airlines'};
 function parseFlexibleDate(text){
@@ -1441,6 +1444,7 @@ function renderDespesas(el){
 function renderTicket(e){
   const c = catInfo(e.categoryKey);
   const loc = state.currentData.locations.find(l=>l.id===e.locationId);
+  const booking = (state.currentData.bookings||[]).find(b=>b.id===e.bookingId);
   const payerName = e.paidBy ? personName(e.paidBy) : null;
   const fundNames=(e.fundAllocations||[]).map(x=>(state.currentData.advances||[]).find(a=>a.id===x.advanceId)).filter(Boolean).map(a=>a.label);
   const fundTotal=(e.fundAllocations||[]).reduce((sum,x)=>sum+Number(x.amount||0),0);
@@ -1451,7 +1455,7 @@ function renderTicket(e){
       <div class="cat-chip" style="background:${c.color}22; border:1px solid ${c.color}55;">${c.icon}</div>
       <div class="info">
         <div class="desc">${escapeHtml(e.description || c.label)}</div>
-        <div class="meta">${e.date ? fmtDateShort(e.date) : 'Sem data'} · ${c.label}${loc ? ' · '+escapeHtml(loc.name) : ''}${paymentMeta}</div>
+        <div class="meta">${e.date ? fmtDateShort(e.date) : 'Sem data'} · ${c.label}${loc ? ' · '+escapeHtml(loc.name) : ''}${booking ? ' · '+escapeHtml(booking.provider||'Reserva') : ''}${paymentMeta}</div>
       </div>
       <div class="amount">${fmtMoney(e.amount, state.currentData.info.currency)}</div>
       <div class="actions">
@@ -1900,8 +1904,9 @@ function drawSelectedGeocodePin(){const mini=document.getElementById('miniMap');
 
 function openExpenseModal(mode, id){
   const editing = mode==='edit';
-  const exp = editing ? state.currentData.expenses.find(e=>e.id===id) : {date:'', categoryKey:CATEGORIES[0].key, description:'', amount:'', locationId:'', paidBy:'', splitWith:[], fundAllocations:[]};
+  const exp = editing ? state.currentData.expenses.find(e=>e.id===id) : {date:'', categoryKey:CATEGORIES[0].key, description:'', amount:'', locationId:'', bookingId:'', paidBy:'', splitWith:[], fundAllocations:[]};
   const locs = state.currentData.locations;
+  const bookings = state.currentData.bookings||[];
   const people = state.currentData.people;
   const splitWith = exp.splitWith && exp.splitWith.length ? exp.splitWith : people.map(p=>p.id);
   openModal(`
@@ -1920,6 +1925,9 @@ function openExpenseModal(mode, id){
       <div class="field"><label>Local associado</label>
         <select id="e_loc"><option value="">— nenhum —</option>${locs.map(l=>`<option value="${l.id}" ${exp.locationId===l.id?'selected':''}>${escapeHtml(l.name)}</option>`).join('')}</select>
       </div>
+    </div>
+    <div class="field"><label>Reserva associada (opcional)</label>
+      <select id="e_booking"><option value="">— nenhuma —</option>${bookings.map(b=>`<option value="${b.id}" ${exp.bookingId===b.id?'selected':''}>${escapeHtml((b.dateFrom?fmtDateShort(b.dateFrom)+' · ':'')+(b.provider||(BOOKING_CATEGORIES.find(c=>c.key===b.category)||{}).label||'Reserva'))}</option>`).join('')}</select>
     </div>
     ${people.length ? `
       ${(state.currentData.advances||[]).length ? `<div class="field"><div style="padding:11px 12px;border:1px solid var(--border);border-radius:8px;background:var(--panel-alt);font-size:12px;color:var(--text-dim);line-height:1.5;"><strong style="color:var(--text)">Uso automático do Fundo de viagem</strong><br>Esta despesa utilizará automaticamente todo o saldo disponível, começando pelo fundo mais antigo. Só o valor que faltar será atribuído à carteira pessoal.</div></div>` : ''}
@@ -1954,6 +1962,7 @@ function openExpenseModal(mode, id){
       description: document.getElementById('e_desc').value.trim(),
       amount,
       locationId: document.getElementById('e_loc').value || null,
+      bookingId: document.getElementById('e_booking').value || null,
       paidBy: paidByEl ? (paidByEl.value || null) : null,
       splitWith: splitEls ? [...splitEls].map(el=>el.value) : [],
     };
