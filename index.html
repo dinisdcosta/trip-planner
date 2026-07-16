@@ -635,6 +635,34 @@ function exportTripData(){
   }
 }
 
+function normalizeImportedTrip(tripData){
+  if(!tripData.info.id) tripData.info.id = uid();
+  if(!tripData.info.currency) tripData.info.currency = 'EUR';
+  if(tripData.info.budgetTotal==null) tripData.info.budgetTotal = 0;
+  tripData.locations = (tripData.locations||[]).map((l,i)=>({
+    id: l.id || uid(), name: l.name||'', day: l.day||'', time: l.time||'', notes: l.notes||'',
+    x: l.x!=null ? l.x : null, y: l.y!=null ? l.y : null, order: l.order!=null ? l.order : i,
+  }));
+  tripData.expenses = (tripData.expenses||[]).map(e=>({
+    id: e.id || uid(), date: e.date||'', categoryKey: CATEGORIES.some(c=>c.key===e.categoryKey) ? e.categoryKey : 'outros',
+    description: e.description||'', amount: Number(e.amount)||0, locationId: e.locationId||null,
+  }));
+  tripData.bookings = (tripData.bookings||[]).map(b=>({
+    id: b.id || uid(), category: BOOKING_CATEGORIES.some(c=>c.key===b.category) ? b.category : 'outro',
+    provider: b.provider||'', code: b.code||'', dateFrom: b.dateFrom||'', dateTo: b.dateTo||'',
+    notes: b.notes||'', link: b.link||'',
+  }));
+  const catKeys = CATEGORIES.map(c=>c.key);
+  tripData.budgetCategories = catKeys.map(key=>{
+    const found = (tripData.budgetCategories||[]).find(b=>b.key===key);
+    return { key, planned: found ? Number(found.planned)||0 : 0 };
+  });
+  // reconcile locationId references that don't match any imported location
+  const locIds = new Set(tripData.locations.map(l=>l.id));
+  tripData.expenses.forEach(e=>{ if(e.locationId && !locIds.has(e.locationId)) e.locationId = null; });
+  return tripData;
+}
+
 async function importTripData(e){
   const file = e.target.files[0];
   e.target.value = '';
@@ -642,8 +670,9 @@ async function importTripData(e){
   try{
     const text = await file.text();
     const parsed = JSON.parse(text);
-    const tripData = ensureShape(parsed.trip || parsed);
+    let tripData = ensureShape(parsed.trip || parsed);
     if(!tripData || !tripData.info || !tripData.info.name){ alert('Este ficheiro não parece ser uma exportação válida do Diário de Viagem.'); return; }
+    tripData = normalizeImportedTrip(tripData);
     const existing = state.trips.find(t=>t.id===tripData.info.id);
     if(existing && !confirm(`Já existe uma viagem "${existing.name}" com este mesmo identificador. Queres substituir os dados guardados por este ficheiro?`)) return;
     if(!existing){
