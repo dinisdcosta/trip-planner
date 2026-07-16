@@ -1329,7 +1329,7 @@ function parseReservationConfirmation(raw){
 function findOrCreateAirportByIata(iata){
   iata=String(iata||'').toUpperCase();if(!iata)return null;
   let loc=state.currentData.locations.find(x=>x.airportIata===iata||new RegExp(`\\(${iata}\\)`).test(x.name||''));
-  if(!loc){loc={id:uid(),name:`Aeroporto ${iata} (${iata})`,address:'',day:'',time:'',notes:'Aeroporto importado de uma confirmação de voo',x:null,y:null,order:state.currentData.locations.length,visited:false,airportIata:iata};state.currentData.locations.push(loc);}
+  if(!loc){loc={id:uid(),name:`Aeroporto ${iata} (${iata})`,address:'',day:'',time:'',notes:'Aeroporto importado de uma confirmação de voo',x:null,y:null,order:nextLocationOrder(),visited:false,airportIata:iata};state.currentData.locations.push(loc);}
   return loc.id;
 }
 function applyParsedReservation(data){
@@ -1348,12 +1348,16 @@ function openReservationImportModal(){
   document.getElementById('reservationImportFile').onchange=async e=>{const f=e.target.files[0];if(f)document.getElementById('reservationImportText').value=await f.text();};
   document.getElementById('parseImportBtn').onclick=()=>{const raw=document.getElementById('reservationImportText').value;if(!raw.trim()){alert('Cola o texto ou escolhe um ficheiro.');return;}const parsed=parseReservationConfirmation(raw);closeModal();openBookingModal('create',null,parsed);};
 }
+function nextLocationOrder(){
+  const orders = (state.currentData.locations||[]).map(l=>Number(l.order)||0);
+  return orders.length ? Math.max(...orders)+1 : 0;
+}
 function getLocationById(id){return (state.currentData.locations||[]).find(l=>l.id===id)||null;}
 function bookingLocationInputValue(id){return getLocationById(id)?.name||'';}
 function findOrCreateTypedLocation(name, note='Local associado a uma reserva'){
   name=String(name||'').trim();if(!name)return null;
   let loc=(state.currentData.locations||[]).find(l=>(l.name||'').trim().toLocaleLowerCase()===name.toLocaleLowerCase());
-  if(!loc){loc={id:uid(),name,address:'',day:'',time:'',notes:note,x:null,y:null,order:state.currentData.locations.length,visited:false,fromBooking:true};state.currentData.locations.push(loc);}
+  if(!loc){loc={id:uid(),name,address:'',day:'',time:'',notes:note,x:null,y:null,order:nextLocationOrder(),visited:false,fromBooking:true};state.currentData.locations.push(loc);}
   return loc.id;
 }
 function mapXYFromCoords(lat, lon){
@@ -1367,7 +1371,7 @@ function chooseBookingPlace(kind, r, q){
   const name=(r.name||r.display_name.split(',')[0]||q).trim();
   let loc=(state.currentData.locations||[]).find(l=>(l.name||'').toLocaleLowerCase()===name.toLocaleLowerCase()||(l.address||'')===r.display_name);
   const xy=mapXYFromCoords(r.lat,r.lon);
-  if(!loc){loc={id:uid(),name,address:r.display_name||'',day:'',time:'',notes:'Local associado a uma reserva',x:xy.x,y:xy.y,lat:Number(r.lat),lon:Number(r.lon),order:state.currentData.locations.length,visited:false,fromBooking:true};state.currentData.locations.push(loc);}
+  if(!loc){loc={id:uid(),name,address:r.display_name||'',day:'',time:'',notes:'Local associado a uma reserva',x:xy.x,y:xy.y,lat:Number(r.lat),lon:Number(r.lon),order:nextLocationOrder(),visited:false,fromBooking:true};state.currentData.locations.push(loc);}
   else Object.assign(loc,{address:loc.address||r.display_name,x:xy.x,y:xy.y,lat:Number(r.lat),lon:Number(r.lon)});
   input.value=loc.name;input.dataset.locationId=loc.id;
   status.textContent=`Local escolhido: ${loc.name}. Será adicionado ao mapa.`;status.style.color='var(--sage)';
@@ -1878,7 +1882,7 @@ function openLocationModal(mode, id){
     if(editing){
       Object.assign(loc, {name, day, time, notes, address, x: xy?xy.x:null, y: xy?xy.y:null});
     } else {
-      const order = state.currentData.locations.length;
+      const order = nextLocationOrder();
       state.currentData.locations.push({id:uid(), name, day, time, notes, address, visited:false, x: xy?xy.x:null, y: xy?xy.y:null, order});
     }
     persistCurrentTrip();
