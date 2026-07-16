@@ -14,7 +14,7 @@ function shell(content){
   const online=navigator.onLine;
   return `<div class="app-shell">
     <header class="topbar">
-      <div class="brand"><small>Travel OS V2</small><h1>${uiState?.activeTripId?esc(currentTrip()?.name||"Viagem"):"As tuas viagens"}</h1></div>
+      <div class="brand"><small>Travel OS V2</small><h1>${uiState?.activeTripId?esc(currentTrip()?.name||"Viagem"):"Viagens"}</h1></div>
       <span class="status-pill">${online?"Online":"Offline — dados locais"}</span>
     </header>
     ${content}
@@ -25,11 +25,11 @@ function renderHome(){
   const trips=uiState.trips;
   return shell(`
     <section class="card hero">
-      <div><h2>Planeia só o necessário</h2><p class="muted">Viagens, reservas, locais e timeline — tudo guardado localmente e disponível offline.</p></div>
-      <button class="btn btn-primary" data-action="new-trip">Nova viagem</button>
+      <div><h2>Tudo o que importa, num só lugar</h2><p class="muted">Guarda reservas, transportes e locais sem transformar a viagem numa agenda rígida.</p></div>
+      <button class="btn btn-primary" data-action="new-trip">Criar viagem</button>
     </section>
     <section class="card">
-      <h2>Viagens</h2>
+      <h2 style="font-family:Georgia,serif;font-weight:500">As tuas viagens</h2>
       <div class="list">
         ${trips.length?trips.map(t=>`<article class="trip-card">
           <div><h3>${esc(t.name)}</h3><p>${fmtDate(t.startDate)}${t.endDate?" — "+fmtDate(t.endDate):""}</p></div>
@@ -51,7 +51,7 @@ function renderTrip(){
   return shell(`
     <div class="actions" style="margin-bottom:1rem">
       <button class="btn" data-action="back">← Viagens</button>
-      <button class="btn btn-primary" data-action="new-event">Adicionar evento</button>
+      <button class="btn btn-primary" data-action="new-event">Adicionar</button>
     </div>
     <section class="card">
       <div class="hero">
@@ -59,7 +59,7 @@ function renderTrip(){
         <span class="badge">${events.length} eventos</span>
       </div>
       <div class="nav">
-        ${tabs.map(tab=>`<button class="btn ${uiState.view===tab?"active":""}" data-action="view" data-view="${tab}">${tab==="timeline"?"Timeline":tab==="reservations"?"Reservas":"Locais"}</button>`).join("")}
+        ${tabs.map(tab=>`<button class="btn ${uiState.view===tab?"active":""}" data-action="view" data-view="${tab}">${tab==="timeline"?"Roteiro":tab==="reservations"?"Reservas":"Locais"}</button>`).join("")}
       </div>
       ${uiState.view==="timeline"?renderTimeline(grouped):uiState.view==="reservations"?renderReservations(events):renderPlaces(events)}
     </section>
