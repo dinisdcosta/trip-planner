@@ -632,19 +632,34 @@ async function init(){
     const innerSvg = tpl.content.querySelector('svg');
     if(innerSvg) WORLD_MAP_PATHS = innerSvg.innerHTML;
   }
+
+  // A interface arranca sempre com os dados locais. A sincronização nunca pode
+  // bloquear os botões, sobretudo quando não há rede ou o GitHub está lento.
   await loadSyncSettings();
   state.trips = await getTripsIndex();
-  if(syncConfigured()){
-    await pullFromGitHub();
-  }
-  if(!state.currentData && state.trips.length){
+  if(state.trips.length){
     state.currentTripId = state.trips[0].id;
     state.currentData = ensureShape(await getTripData(state.currentTripId));
   }
+
   renderHeader();
   renderTabs();
   renderCurrentTab();
   bindGlobalEvents();
+
+  // Atualiza em segundo plano e volta a desenhar apenas quando terminar.
+  if(syncConfigured() && navigator.onLine){
+    pullFromGitHub().then(ok=>{
+      if(ok){
+        renderHeader();
+        renderTabs();
+        renderCurrentTab();
+      }
+    }).catch(err=>{
+      console.error(err);
+      setSyncStatus('Falha ao sincronizar: '+err.message);
+    });
+  }
 }
 
 function bindGlobalEvents(){
@@ -772,6 +787,9 @@ function normalizeImportedTrip(tripData){
   tripData.bookings = (tripData.bookings||[]).map(b=>({
     id: b.id || uid(), category: BOOKING_CATEGORIES.some(c=>c.key===b.category) ? b.category : 'outro',
     provider: b.provider||'', code: b.code||'', dateFrom: b.dateFrom||'', dateTo: b.dateTo||'',
+    timeFrom: b.timeFrom||'', timeTo: b.timeTo||'', locationId: b.locationId||null,
+    arrivalLocationId: b.arrivalLocationId||null, flightNumber:b.flightNumber||'', flightStatus:b.flightStatus||'',
+    departureTerminal:b.departureTerminal||'', arrivalTerminal:b.arrivalTerminal||'', lastFlightUpdate:b.lastFlightUpdate||'',
     notes: b.notes||'', link: b.link||'',
   }));
   const catKeys = CATEGORIES.map(c=>c.key);
@@ -906,7 +924,7 @@ function updateNetworkStatus(){
 }
 function renderToday(el){
   const d=state.currentData, today=todayLocalISO();
-  const datedBookings=d.bookings.filter(b=>b.dateFrom===today || b.dateTo===today).sort((a,b)=>(a.dateFrom||'').localeCompare(b.dateFrom||''));
+  const datedBookings=d.bookings.filter(b=>b.dateFrom===today || b.dateTo===today).sort((a,b)=>bookingSortKey(a).localeCompare(bookingSortKey(b)));
   const urgent=d.tasks.filter(t=>!t.done && (!t.dueDate || t.dueDate<=today)).sort((a,b)=>(a.dueDate||'9999').localeCompare(b.dueDate||'9999'));
   const ideas=d.locations.filter(l=>!l.visited && (!l.day || l.day===today)).slice(0,8);
   const fund=(d.advances||[]).reduce((sum,a)=>sum+advanceRemaining(a.id),0);
@@ -918,7 +936,7 @@ function renderToday(el){
       <div class="quick-card"><div class="kicker">Fundo disponível</div><div class="big">${fmtMoney(fund,d.info.currency)}</div></div>
     </div>
     <div class="chart-row">
-      <div class="list-card"><div class="flex-head"><h3 class="section-title">Transportes e reservas</h3><button class="btn btn-sm" onclick="state.activeTab='reservas';renderTabs();renderCurrentTab()">Ver carteira</button></div>${datedBookings.length?datedBookings.map(b=>`<div class="check-row"><div style="font-size:20px">${(BOOKING_CATEGORIES.find(c=>c.key===b.category)||BOOKING_CATEGORIES[4]).icon}</div><div class="check-main"><div class="check-title">${escapeHtml(b.provider||'Reserva')}</div><div class="check-meta">${b.code?`Código: <strong>${escapeHtml(b.code)}</strong>`:''} ${b.notes?`· ${escapeHtml(b.notes)}`:''}</div></div></div>`).join(''):'<div class="check-meta">Nenhum transporte ou reserva marcado para hoje.</div>'}</div>
+      <div class="list-card"><div class="flex-head"><h3 class="section-title">Transportes e reservas</h3><button class="btn btn-sm" onclick="state.activeTab='reservas';renderTabs();renderCurrentTab()">Ver carteira</button></div>${datedBookings.length?datedBookings.map(b=>`<div class="check-row"><div style="font-size:20px">${(BOOKING_CATEGORIES.find(c=>c.key===b.category)||BOOKING_CATEGORIES[4]).icon}</div><div class="check-main"><div class="check-title">${b.timeFrom?escapeHtml(b.timeFrom)+' · ':''}${escapeHtml(b.provider||'Reserva')}${b.flightNumber?' · '+escapeHtml(b.flightNumber):''}</div><div class="check-meta">${bookingLocationText(b)?escapeHtml(bookingLocationText(b))+' · ':''}${b.code?`Código: <strong>${escapeHtml(b.code)}</strong>`:''} ${b.notes?`· ${escapeHtml(b.notes)}`:''}</div></div></div>`).join(''):'<div class="check-meta">Nenhum transporte ou reserva marcado para hoje.</div>'}</div>
       <div class="list-card"><div class="flex-head"><h3 class="section-title">Falta tratar</h3><button class="btn btn-sm" onclick="openTaskModal()">+ Tarefa</button></div>${renderTaskRows(urgent)}</div>
     </div>
     <div class="list-card" style="margin-top:18px"><div class="flex-head"><h3 class="section-title">Ideias e locais por visitar</h3><button class="btn btn-sm" onclick="state.activeTab='roteiro';renderTabs();renderCurrentTab()">Ver todos</button></div>${ideas.length?ideas.map(renderInterestRow).join(''):'<div class="check-meta">Adiciona locais sem data para teres uma lista flexível de ideias.</div>'}</div>`;
@@ -1054,40 +1072,32 @@ function renderDayChart(expenses, currency){
 }
 
 /* ============================= ROTEIRO & MAPA ============================= */
+function bookingSortKey(b){ return `${b.dateFrom||'9999-12-31'}T${b.timeFrom||'23:59'}`; }
+function bookingLocationText(b){
+  const a=state.currentData.locations.find(l=>l.id===b.locationId);
+  const z=state.currentData.locations.find(l=>l.id===b.arrivalLocationId);
+  return [a?.name,z?.name].filter(Boolean).join(' → ');
+}
 function renderRoteiro(el){
-  const locs = [...state.currentData.locations].sort((a,b)=> (a.day||'').localeCompare(b.day||'') || (a.time||'').localeCompare(b.time||'') || (a.order||0)-(b.order||0));
-  const grouped = {};
-  locs.forEach(l=>{ const k = l.day || 'Sem data'; (grouped[k]=grouped[k]||[]).push(l); });
-  const dayKeys = Object.keys(grouped).sort();
-
+  const locs = [...state.currentData.locations];
+  const bookings=[...(state.currentData.bookings||[])];
+  const events=[];
+  locs.forEach(l=>events.push({kind:'location',date:l.day||'',time:l.time||'',sort:`${l.day||'9999-12-31'}T${l.time||'23:59'}`,data:l}));
+  bookings.forEach(b=>events.push({kind:'booking',date:b.dateFrom||'',time:b.timeFrom||'',sort:bookingSortKey(b),data:b}));
+  events.sort((a,b)=>a.sort.localeCompare(b.sort));
+  const grouped={}; events.forEach(e=>{const k=e.date||'Sem data';(grouped[k]=grouped[k]||[]).push(e)});
+  const dayKeys=Object.keys(grouped).sort((a,b)=>a==='Sem data'?1:b==='Sem data'?-1:a.localeCompare(b));
   el.innerHTML = `
-    <h2 class="section-title">Locais de interesse &amp; Mapa</h2>
-    <div class="itin-layout">
-      <div>
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
-          <span style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-dim); text-transform:uppercase;">Quero visitar</span>
-          <button class="btn btn-sm btn-primary" onclick="openLocationModal('create')">+ Adicionar paragem</button>
-        </div>
-        <div id="itinList">
-          ${dayKeys.length ? dayKeys.map(day => `
-            <div class="day-group">
-              <div style="display:flex; justify-content:space-between; align-items:center;">
-                <div class="day-label">${day==='Sem data' ? 'Sem data' : new Date(day+'T00:00:00').toLocaleDateString('pt-PT',{weekday:'long', day:'2-digit', month:'short'})}</div>
-                <button class="icon-btn" title="Eliminar este dia inteiro" onclick="deleteDayGroup('${day==='Sem data' ? '' : day}')">🗑 dia</button>
-              </div>
-              ${grouped[day].map(loc => renderLocItem(loc)).join('')}
-            </div>
-          `).join('') : `<p style="color:var(--text-dim); font-size:14px;">Ainda não adicionaste nenhuma paragem. Começa pela primeira!</p>`}
-        </div>
-      </div>
-      <div>
-        <div id="mapCanvas" class="map-canvas"></div>
-        <div class="map-legend">📍 Clica num pin para ver detalhes e gastos associados.</div>
-        <div class="map-credit">Mapa base: Wikimedia Commons, CC BY-SA 3.0</div>
-      </div>
-    </div>
-  `;
+    <div class="flex-head"><div><h2 class="section-title" style="margin-bottom:4px">Roteiro &amp; percurso</h2><div class="check-meta">Reservas, transportes, alojamentos e locais aparecem juntos por data e hora. A hora é sempre opcional.</div></div><div style="display:flex;gap:8px"><button class="btn btn-sm" onclick="openBookingModal('create')">+ Reserva</button><button class="btn btn-sm btn-primary" onclick="openLocationModal('create')">+ Local</button></div></div>
+    <div class="itin-layout" style="margin-top:18px"><div><div id="itinList">
+      ${dayKeys.length?dayKeys.map(day=>`<div class="day-group"><div class="day-label">${day==='Sem data'?'Sem data':new Date(day+'T00:00:00').toLocaleDateString('pt-PT',{weekday:'long',day:'2-digit',month:'short'})}</div>${grouped[day].map(e=>e.kind==='booking'?renderBookingTimelineItem(e.data):renderLocItem(e.data)).join('')}</div>`).join(''):'<p style="color:var(--text-dim);font-size:14px">Ainda não existem elementos no roteiro.</p>'}
+    </div></div><div><div id="mapCanvas" class="map-canvas"></div><div class="map-legend">📍 O mapa inclui locais de interesse e locais associados às reservas.</div><div class="map-credit">Mapa base: Wikimedia Commons, CC BY-SA 3.0</div></div></div>`;
   renderMapCanvas();
+}
+function renderBookingTimelineItem(b){
+  const c=BOOKING_CATEGORIES.find(x=>x.key===b.category)||BOOKING_CATEGORIES[4];
+  const where=bookingLocationText(b);
+  return `<div class="loc-item"><div class="loc-pin-num" style="background:var(--teal)">${c.icon}</div><div class="loc-body"><div class="name">${b.timeFrom?`<span style="font-family:var(--font-mono);color:var(--gold);font-size:12.5px;margin-right:6px">${escapeHtml(b.timeFrom)}</span>`:''}${escapeHtml(b.provider||c.label)}${b.flightNumber?` · ${escapeHtml(b.flightNumber)}`:''}</div>${where?`<div class="notes">${escapeHtml(where)}${b.timeTo?` · chegada ${escapeHtml(b.timeTo)}`:''}</div>`:''}${b.code?`<div class="spend">Reserva: ${escapeHtml(b.code)}</div>`:''}</div><div class="loc-actions"><button class="icon-btn" title="Editar" onclick="openBookingModal('edit','${b.id}')">✎</button></div></div>`;
 }
 
 function renderLocItem(loc){
@@ -1170,83 +1180,50 @@ function deleteLocation(id){
 
 /* ============================= RESERVAS (carteira de viagem) ============================= */
 function renderReservas(el){
-  const bookings = [...(state.currentData.bookings||[])].sort((a,b)=> (a.dateFrom||'').localeCompare(b.dateFrom||''));
-  el.innerHTML = `
-    <h2 class="section-title">Reservas</h2>
-    <p style="color:var(--text-dim); font-size:13.5px; margin:-10px 0 18px; max-width:60ch; line-height:1.6;">
-      Guarda aqui os códigos de reserva, datas e links dos voos, hotéis e outros serviços — a tua carteira de viagem.
-    </p>
-    <div class="expense-toolbar">
-      <span style="font-family:var(--font-mono); font-size:12px; color:var(--text-dim);">${bookings.length} reserva(s)</span>
-      <button class="btn btn-primary" onclick="openBookingModal('create')">+ Adicionar reserva</button>
-    </div>
-    <div id="bookingList">
-      ${bookings.length ? bookings.map(b=>renderBookingTicket(b)).join('') : `<p style="color:var(--text-dim); font-size:14px;">Ainda não tens reservas guardadas.</p>`}
-    </div>
-  `;
+  const bookings=[...(state.currentData.bookings||[])].sort((a,b)=>bookingSortKey(a).localeCompare(bookingSortKey(b)));
+  el.innerHTML=`<div class="flex-head"><div><h2 class="section-title" style="margin-bottom:4px">Reservas</h2><div class="check-meta">Ordenadas por data e hora. Cada reserva pode ficar associada a um local e aparece automaticamente no roteiro.</div></div><button class="btn btn-primary" onclick="openBookingModal('create')">+ Adicionar reserva</button></div><div id="bookingList" style="margin-top:18px">${bookings.length?bookings.map(renderBookingTicket).join(''):'<p style="color:var(--text-dim);font-size:14px">Ainda não tens reservas guardadas.</p>'}</div>`;
 }
-
 function renderBookingTicket(b){
-  const c = BOOKING_CATEGORIES.find(x=>x.key===b.category) || BOOKING_CATEGORIES[BOOKING_CATEGORIES.length-1];
-  const dateRange = b.dateFrom ? (b.dateTo && b.dateTo!==b.dateFrom ? `${fmtDateShort(b.dateFrom)} → ${fmtDateShort(b.dateTo)}` : fmtDateShort(b.dateFrom)) : 'Sem data';
-  return `
-    <div class="ticket">
-      <div class="cat-chip" style="background:#C9A24D22; border:1px solid #C9A24D55;">${c.icon}</div>
-      <div class="info">
-        <div class="desc">${escapeHtml(b.provider || c.label)}${b.code ? ` <span style="color:var(--text-dim); font-family:var(--font-mono); font-size:12px;">· ${escapeHtml(b.code)}</span>` : ''}</div>
-        <div class="meta">${c.label} · ${dateRange}${b.notes ? ' · '+escapeHtml(b.notes) : ''}</div>
-      </div>
-      ${b.link ? `<a href="${escapeHtml(b.link)}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-ghost">Abrir ↗</a>` : ''}
-      <div class="actions">
-        <button class="icon-btn" title="Editar" onclick="openBookingModal('edit','${b.id}')">✎</button>
-        <button class="icon-btn" title="Eliminar" onclick="deleteBooking('${b.id}')">🗑</button>
-      </div>
-    </div>`;
+  const c=BOOKING_CATEGORIES.find(x=>x.key===b.category)||BOOKING_CATEGORIES[4];
+  const date=b.dateFrom?fmtDateShort(b.dateFrom):'Sem data'; const where=bookingLocationText(b);
+  return `<div class="ticket"><div class="cat-chip" style="background:#C9A24D22;border:1px solid #C9A24D55">${c.icon}</div><div class="info"><div class="desc">${escapeHtml(b.provider||c.label)}${b.flightNumber?` · ${escapeHtml(b.flightNumber)}`:''}${b.code?` <span style="color:var(--text-dim);font-family:var(--font-mono);font-size:12px">· ${escapeHtml(b.code)}</span>`:''}</div><div class="meta">${c.label} · ${date}${b.timeFrom?' · '+escapeHtml(b.timeFrom):''}${b.timeTo?' → '+escapeHtml(b.timeTo):''}${where?' · '+escapeHtml(where):''}${b.flightStatus?' · '+escapeHtml(b.flightStatus):''}</div></div>${b.link?`<a href="${escapeHtml(b.link)}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-ghost">Abrir ↗</a>`:''}<div class="actions"><button class="icon-btn" title="Editar" onclick="openBookingModal('edit','${b.id}')">✎</button><button class="icon-btn" title="Eliminar" onclick="deleteBooking('${b.id}')">🗑</button></div></div>`;
 }
-
-function deleteBooking(id){
-  state.currentData.bookings = state.currentData.bookings.filter(b=>b.id!==id);
-  persistCurrentTrip();
-  renderReservas(document.getElementById('panelContent'));
+function deleteBooking(id){state.currentData.bookings=state.currentData.bookings.filter(b=>b.id!==id);persistCurrentTrip();renderCurrentTab();}
+function locationOptions(selected){return `<option value="">Sem local associado</option>`+state.currentData.locations.map(l=>`<option value="${l.id}" ${selected===l.id?'selected':''}>${escapeHtml(l.name)}</option>`).join('');}
+async function getFlightApiKey(){let key=await deviceGet('aviationstack-key');if(key)return key;key=prompt('Chave gratuita do Aviationstack (fica guardada apenas neste navegador):','')||'';key=key.trim();if(key)await deviceSet('aviationstack-key',key);return key;}
+function isoDateTimeParts(value){if(!value)return {date:'',time:''};const m=String(value).match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);return m?{date:m[1],time:m[2]}:{date:'',time:''};}
+function mapXYFromCoords(lat,lon){lat=Number(lat);lon=Number(lon);if(!Number.isFinite(lat)||!Number.isFinite(lon))return {x:null,y:null};return{x:Math.max(0,Math.min(100,(lon+180)/360*100)),y:Math.max(0,Math.min(100,(90-lat)/180*100))};}
+function findOrCreateAirport(name,iata,lat,lon){const label=[name,iata&&`(${iata})`].filter(Boolean).join(' ');let l=state.currentData.locations.find(x=>iata&&x.airportIata===iata);if(!l){const xy=mapXYFromCoords(lat,lon);l={id:uid(),name:label||iata||'Aeroporto',address:'',day:'',time:'',notes:'Aeroporto associado automaticamente a um voo',x:xy.x,y:xy.y,order:state.currentData.locations.length,visited:false,airportIata:iata||''};state.currentData.locations.push(l);}return l.id;}
+async function lookupFlightInModal(){
+  if(!navigator.onLine){alert('A pesquisa de voos precisa de internet. Podes preencher manualmente e pesquisar mais tarde.');return;}
+  const number=document.getElementById('b_flight').value.trim().replace(/\s+/g,'').toUpperCase();const date=document.getElementById('b_from').value;
+  if(!number||!date){alert('Indica o número do voo e a data.');return;}
+  const key=await getFlightApiKey();if(!key)return;
+  const btn=document.getElementById('lookupFlightBtn');btn.disabled=true;btn.textContent='A procurar…';
+  try{
+    const url=`https://api.aviationstack.com/v1/flights?access_key=${encodeURIComponent(key)}&flight_iata=${encodeURIComponent(number)}&flight_date=${encodeURIComponent(date)}&limit=10`;
+    const res=await fetch(url);const json=await res.json();if(!res.ok||json.error)throw new Error(json.error?.message||`HTTP ${res.status}`);
+    const rows=json.data||[];const f=rows.find(x=>(x.flight?.iata||'').replace(/\s+/g,'').toUpperCase()===number)||rows[0];if(!f)throw new Error('Voo não encontrado para essa data.');
+    const dep=isoDateTimeParts(f.departure?.scheduled);const arr=isoDateTimeParts(f.arrival?.scheduled);
+    document.getElementById('b_provider').value=f.airline?.name||document.getElementById('b_provider').value;
+    document.getElementById('b_flight').value=f.flight?.iata||number;document.getElementById('b_from').value=dep.date||date;document.getElementById('b_time_from').value=dep.time;document.getElementById('b_to').value=arr.date||dep.date||date;document.getElementById('b_time_to').value=arr.time;
+    document.getElementById('b_status').value=f.flight_status||'';document.getElementById('b_dep_terminal').value=f.departure?.terminal||'';document.getElementById('b_arr_terminal').value=f.arrival?.terminal||'';
+    const depId=findOrCreateAirport(f.departure?.airport,f.departure?.iata,f.departure?.latitude,f.departure?.longitude);const arrId=findOrCreateAirport(f.arrival?.airport,f.arrival?.iata,f.arrival?.latitude,f.arrival?.longitude);
+    document.getElementById('b_location').innerHTML=locationOptions(depId);document.getElementById('b_arrival_location').innerHTML=locationOptions(arrId);document.getElementById('flightLookupStatus').textContent=`Encontrado: ${f.departure?.iata||''} → ${f.arrival?.iata||''}. Dados guardados para consulta offline.`;
+  }catch(e){console.error(e);alert('Não foi possível encontrar o voo: '+e.message);}finally{btn.disabled=false;btn.textContent='Procurar voo';}
 }
-
-function openBookingModal(mode, id){
-  const editing = mode==='edit';
-  const b = editing ? state.currentData.bookings.find(x=>x.id===id) : {category:BOOKING_CATEGORIES[0].key, provider:'', code:'', dateFrom:'', dateTo:'', notes:'', link:''};
-  openModal(`
-    <h3>${editing?'Editar reserva':'Nova reserva'}</h3>
-    <div class="field"><label>Tipo</label><select id="b_cat">${BOOKING_CATEGORIES.map(c=>`<option value="${c.key}" ${b.category===c.key?'selected':''}>${c.icon} ${c.label}</option>`).join('')}</select></div>
-    <div class="field"><label>Fornecedor / Companhia</label><input id="b_provider" value="${escapeHtml(b.provider||'')}" placeholder="Ex: TAP Air Portugal, Hotel Sakura"></div>
-    <div class="field"><label>Código de reserva</label><input id="b_code" value="${escapeHtml(b.code||'')}" placeholder="Ex: X7K9QP"></div>
-    <div class="field-row">
-      <div class="field"><label>Data (início)</label><input type="date" id="b_from" value="${b.dateFrom||''}"></div>
-      <div class="field"><label>Data (fim, opcional)</label><input type="date" id="b_to" value="${b.dateTo||''}"></div>
-    </div>
-    <div class="field"><label>Link (opcional)</label><input id="b_link" value="${escapeHtml(b.link||'')}" placeholder="https://..."></div>
-    <div class="field"><label>Notas (opcional)</label><textarea id="b_notes" rows="2" placeholder="Nº do voo, morada, contacto...">${escapeHtml(b.notes||'')}</textarea></div>
-    <div class="modal-actions">
-      ${editing ? `<button class="btn btn-danger" style="margin-right:auto;" onclick="deleteBooking('${id}'); closeModal();">Eliminar</button>`:''}
-      <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-primary" id="saveBookingBtn">${editing?'Guardar':'Adicionar'}</button>
-    </div>
-  `);
-  document.getElementById('saveBookingBtn').addEventListener('click', ()=>{
-    const payload = {
-      category: document.getElementById('b_cat').value,
-      provider: document.getElementById('b_provider').value.trim(),
-      code: document.getElementById('b_code').value.trim(),
-      dateFrom: document.getElementById('b_from').value,
-      dateTo: document.getElementById('b_to').value,
-      link: document.getElementById('b_link').value.trim(),
-      notes: document.getElementById('b_notes').value.trim(),
-    };
-    if(!payload.provider){ alert('Indica o fornecedor ou companhia.'); return; }
-    if(editing){ Object.assign(b, payload); }
-    else { state.currentData.bookings.push({id:uid(), ...payload}); }
-    persistCurrentTrip();
-    closeModal();
-    renderReservas(document.getElementById('panelContent'));
-  });
+function toggleBookingFlightFields(){const flight=document.getElementById('b_cat')?.value==='voo';document.querySelectorAll('.flight-only').forEach(x=>x.style.display=flight?'flex':'none');const arr=document.getElementById('arrivalLocationField');if(arr)arr.style.display=flight?'flex':'none';}
+function openBookingModal(mode,id){
+ const editing=mode==='edit';const b=editing?state.currentData.bookings.find(x=>x.id===id):{category:'voo',provider:'',code:'',dateFrom:'',dateTo:'',timeFrom:'',timeTo:'',locationId:'',arrivalLocationId:'',flightNumber:'',flightStatus:'',departureTerminal:'',arrivalTerminal:'',notes:'',link:''};
+ openModal(`<h3>${editing?'Editar reserva':'Nova reserva'}</h3><div class="field"><label>Tipo</label><select id="b_cat">${BOOKING_CATEGORIES.map(c=>`<option value="${c.key}" ${b.category===c.key?'selected':''}>${c.icon} ${c.label}</option>`).join('')}</select></div>
+ <div class="field-row flight-only"><div class="field"><label>Número do voo</label><input id="b_flight" value="${escapeHtml(b.flightNumber||'')}" placeholder="Ex: TP1358"></div><div class="field" style="justify-content:flex-end"><label>&nbsp;</label><button type="button" class="btn" id="lookupFlightBtn">Procurar voo</button></div></div><div id="flightLookupStatus" class="flight-only check-meta" style="margin:-6px 0 12px"></div>
+ <div class="field"><label>Fornecedor / Companhia</label><input id="b_provider" value="${escapeHtml(b.provider||'')}" placeholder="Ex: TAP, Hotel Sakura"></div><div class="field"><label>Código de reserva (opcional)</label><input id="b_code" value="${escapeHtml(b.code||'')}"></div>
+ <div class="field-row"><div class="field"><label>Data de início</label><input type="date" id="b_from" value="${b.dateFrom||''}"></div><div class="field"><label>Hora (opcional)</label><input type="time" id="b_time_from" value="${b.timeFrom||''}"></div></div><div class="field-row"><div class="field"><label>Data de fim (opcional)</label><input type="date" id="b_to" value="${b.dateTo||''}"></div><div class="field"><label>Hora de fim/chegada</label><input type="time" id="b_time_to" value="${b.timeTo||''}"></div></div>
+ <div class="field"><label>Local associado</label><select id="b_location">${locationOptions(b.locationId)}</select><small class="check-meta">Podes criar primeiro um local no mapa ou deixar sem local.</small></div><div class="field" id="arrivalLocationField"><label>Local de chegada</label><select id="b_arrival_location">${locationOptions(b.arrivalLocationId)}</select></div>
+ <div class="field-row flight-only"><div class="field"><label>Terminal de partida</label><input id="b_dep_terminal" value="${escapeHtml(b.departureTerminal||'')}"></div><div class="field"><label>Terminal de chegada</label><input id="b_arr_terminal" value="${escapeHtml(b.arrivalTerminal||'')}"></div></div><div class="field flight-only"><label>Estado do voo</label><input id="b_status" value="${escapeHtml(b.flightStatus||'')}"></div>
+ <div class="field"><label>Link (opcional)</label><input id="b_link" value="${escapeHtml(b.link||'')}"></div><div class="field"><label>Notas (opcional)</label><textarea id="b_notes" rows="2">${escapeHtml(b.notes||'')}</textarea></div><div class="modal-actions">${editing?`<button class="btn btn-danger" style="margin-right:auto" onclick="deleteBooking('${id}');closeModal()">Eliminar</button>`:''}<button class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" id="saveBookingBtn">${editing?'Guardar':'Adicionar'}</button></div>`);
+ document.getElementById('b_cat').onchange=toggleBookingFlightFields;document.getElementById('lookupFlightBtn').onclick=lookupFlightInModal;toggleBookingFlightFields();
+ document.getElementById('saveBookingBtn').onclick=()=>{const payload={category:document.getElementById('b_cat').value,provider:document.getElementById('b_provider').value.trim(),code:document.getElementById('b_code').value.trim(),dateFrom:document.getElementById('b_from').value,dateTo:document.getElementById('b_to').value,timeFrom:document.getElementById('b_time_from').value,timeTo:document.getElementById('b_time_to').value,locationId:document.getElementById('b_location').value||null,arrivalLocationId:document.getElementById('b_arrival_location').value||null,flightNumber:document.getElementById('b_flight').value.trim().toUpperCase(),flightStatus:document.getElementById('b_status').value.trim(),departureTerminal:document.getElementById('b_dep_terminal').value.trim(),arrivalTerminal:document.getElementById('b_arr_terminal').value.trim(),lastFlightUpdate:document.getElementById('b_flight').value?new Date().toISOString():(b.lastFlightUpdate||''),link:document.getElementById('b_link').value.trim(),notes:document.getElementById('b_notes').value.trim()};if(!payload.provider){alert('Indica o fornecedor ou companhia.');return;}if(editing)Object.assign(b,payload);else state.currentData.bookings.push({id:uid(),...payload});persistCurrentTrip();closeModal();renderCurrentTab();};
 }
 
 /* ============================= DESPESAS ============================= */
