@@ -1350,6 +1350,10 @@ function findOrCreateTypedLocation(name, note='Local associado a uma reserva'){
   if(!loc){loc={id:uid(),name,address:'',day:'',time:'',notes:note,x:null,y:null,order:state.currentData.locations.length,visited:false};state.currentData.locations.push(loc);}
   return loc.id;
 }
+function mapXYFromCoords(lat, lon){
+  lat = Number(lat); lon = Number(lon);
+  return {x: Math.max(2, Math.min(98, (lon+180)/360*100)), y: Math.max(4, Math.min(96, (90-lat)/180*100))};
+}
 async function searchBookingPlace(kind){
   const input=document.getElementById(kind==='arrival'?'b_arrival_location_text':'b_location_text');
   const status=document.getElementById(kind==='arrival'?'b_arrival_location_status':'b_location_status');
@@ -1870,7 +1874,7 @@ function openLocationModal(mode, id){
 async function searchAddressForLocation(){
   const q=document.getElementById('l_address').value.trim(), box=document.getElementById('addressResults');
   if(!q)return; box.innerHTML='<span style="font-size:12px;color:var(--text-dim)">A pesquisar…</span>';
-  try{const res=await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&q=${encodeURIComponent(q)}`,{headers:{'Accept-Language':'pt'}});if(!res.ok)throw new Error('Pesquisa indisponível');const items=await res.json();box.innerHTML=items.length?items.map((r,i)=>`<button type="button" class="search-result" data-i="${i}">${escapeHtml(r.display_name)}</button>`).join(''):'<span style="font-size:12px;color:var(--text-dim)">Nenhum resultado.</span>';box.querySelectorAll('button').forEach(b=>b.onclick=()=>{const r=items[Number(b.dataset.i)];document.getElementById('l_address').value=r.display_name;if(!document.getElementById('l_name').value.trim())document.getElementById('l_name').value=(r.name||r.display_name.split(',')[0]);const lon=Number(r.lon),lat=Number(r.lat);state.modalPendingXY={x:Math.max(2,Math.min(98,(lon+180)/360*100)),y:Math.max(4,Math.min(96,(90-lat)/180*100))};drawSelectedGeocodePin();box.innerHTML='';});}catch(err){box.innerHTML=`<span style="font-size:12px;color:var(--coral)">${escapeHtml(err.message)}. Também podes marcar manualmente no mapa.</span>`;}
+  try{const res=await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&q=${encodeURIComponent(q)}`,{headers:{'Accept-Language':'pt'}});if(!res.ok)throw new Error('Pesquisa indisponível');const items=await res.json();box.innerHTML=items.length?items.map((r,i)=>`<button type="button" class="search-result" data-i="${i}">${escapeHtml(r.display_name)}</button>`).join(''):'<span style="font-size:12px;color:var(--text-dim)">Nenhum resultado.</span>';box.querySelectorAll('button').forEach(b=>b.onclick=()=>{const r=items[Number(b.dataset.i)];document.getElementById('l_address').value=r.display_name;if(!document.getElementById('l_name').value.trim())document.getElementById('l_name').value=(r.name||r.display_name.split(',')[0]);state.modalPendingXY=mapXYFromCoords(r.lat,r.lon);drawSelectedGeocodePin();box.innerHTML='';});}catch(err){box.innerHTML=`<span style="font-size:12px;color:var(--coral)">${escapeHtml(err.message)}. Também podes marcar manualmente no mapa.</span>`;}
 }
 function drawSelectedGeocodePin(){const mini=document.getElementById('miniMap');if(!mini||!state.modalPendingXY)return;mini.querySelector('.pin-preview')?.remove();mini.querySelector('.hint').style.display='none';const pin=document.createElement('div');pin.className='pin-preview';pin.style.left=state.modalPendingXY.x+'%';pin.style.top=state.modalPendingXY.y+'%';mini.appendChild(pin);}
 
