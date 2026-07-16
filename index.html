@@ -437,7 +437,12 @@ let pushTimer = null;
 function schedulePush(){
   if(!syncConfigured() || !navigator.onLine) return;
   clearTimeout(pushTimer);
-  pushTimer = setTimeout(()=>{ pushToGitHub(); }, 1200);
+  pushTimer = setTimeout(function attemptPush(){
+    // Nunca troca os dados por baixo de um modal aberto (ex: a adicionar uma
+    // reserva) — espera até o utilizador terminar e fechar o modal.
+    if(isUserEditing()){ pushTimer = setTimeout(attemptPush, 1500); return; }
+    pushToGitHub();
+  }, 1200);
 }
 
 function mergeRecords(remoteList, localList){
@@ -736,7 +741,7 @@ async function init(){
   // A sincronização corre sempre depois de a app estar utilizável.
   if(syncConfigured() && navigator.onLine){
     Promise.resolve().then(()=>pullFromGitHub()).then(ok=>{
-      if(ok){
+      if(ok && !isUserEditing()){
         try { renderHeader(); renderTabs(); renderCurrentTab(); }
         catch(err) { console.error('Falha ao redesenhar após sincronização:', err); }
       }
@@ -1731,7 +1736,7 @@ function openModal(html){
   root.innerHTML = `<div class="modal-overlay" id="modalOverlay"><div class="modal">${html}</div></div>`;
   document.getElementById('modalOverlay').addEventListener('click', (e)=>{ if(e.target.id==='modalOverlay') closeModal(); });
 }
-function closeModal(){ document.getElementById('modalRoot').innerHTML=''; state.modalPendingXY = null; }
+function closeModal(){ document.getElementById('modalRoot').innerHTML=''; state.modalPendingXY = null; if(syncConfigured()) schedulePush(); }
 
 function openTripModal(mode){
   const editing = mode==='edit';
