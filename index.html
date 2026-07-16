@@ -275,6 +275,10 @@ svg.world-bg path:hover{fill:rgba(201,162,77,0.35);}
   .app{padding:14px 12px 76px}.header{align-items:flex-start;margin-bottom:14px}.trip-picker{width:100%;display:grid;grid-template-columns:1fr 1fr}.trip-picker select{grid-column:1/-1;width:100%}.trip-picker .btn{padding:10px 8px;font-size:10.5px}.tabs{position:sticky;top:0;z-index:20;background:var(--bg);margin:0 -12px 14px;padding:8px 12px;gap:5px}.tab{padding:9px 12px;font-size:10.5px;border-radius:9px;border-bottom:1px solid var(--border)}.panel{padding:18px 14px;border-radius:12px}.ticket{gap:9px;padding:12px 10px}.ticket .amount{font-size:13px}.field-row{flex-direction:column;gap:0}.modal{padding:20px 16px}.stat-row{grid-template-columns:1fr 1fr!important}.address-search{flex-direction:column}.fund-head{flex-direction:column}}
 
 @media (prefers-reduced-motion: reduce){*{animation:none !important; transition:none !important;}}
+
+/* ---------- Hoje, listas e módulos ---------- */
+.quick-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:22px}.quick-card,.list-card{background:var(--panel-alt);border:1px solid var(--border);border-radius:12px;padding:16px}.quick-card .kicker{font:11px var(--font-mono);text-transform:uppercase;letter-spacing:.07em;color:var(--text-dim)}.quick-card .big{font:600 20px var(--font-display);margin-top:6px}.flex-head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}.check-row{display:flex;align-items:flex-start;gap:11px;padding:12px 0;border-bottom:1px solid var(--border)}.check-row:last-child{border-bottom:0}.check-row.done{opacity:.58}.check-row.done .check-title{text-decoration:line-through}.round-check{width:24px;height:24px;border-radius:50%;border:1px solid var(--border);background:transparent;color:var(--sage);cursor:pointer;flex:0 0 auto}.round-check.checked{background:rgba(134,174,140,.14);border-color:var(--sage)}.check-main{flex:1;min-width:0}.check-title{font-weight:600;font-size:14px}.check-meta{color:var(--text-dim);font-size:12px;margin-top:3px;line-height:1.45}.badge{display:inline-flex;padding:3px 7px;border-radius:999px;background:rgba(201,162,77,.12);color:var(--gold);font:10.5px var(--font-mono);text-transform:uppercase}.module-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.offline-pill{display:inline-flex;align-items:center;gap:6px;font:10.5px var(--font-mono);color:var(--text-dim)}.offline-pill::before{content:'';width:7px;height:7px;border-radius:50%;background:var(--sage)}.offline-pill.offline::before{background:var(--coral)}
+@media(max-width:820px){.quick-grid{grid-template-columns:1fr}.module-grid{grid-template-columns:1fr}.mobile-primary{position:fixed;right:18px;bottom:18px;z-index:30;border-radius:999px;box-shadow:0 8px 24px rgba(0,0,0,.3)}}
 </style>
 </head>
 <body>
@@ -285,7 +289,7 @@ svg.world-bg path:hover{fill:rgba(201,162,77,0.35);}
     <div class="brand">
       <div class="eyebrow">Diário de viagem</div>
       <h1 id="tripTitle">A carregar…</h1>
-      <div id="syncStatus" style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-dim); margin-top:2px;"></div>
+      <div id="syncStatus" style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-dim); margin-top:2px;"></div><div id="networkStatus" class="offline-pill" style="margin-top:4px">Disponível offline</div>
     </div>
     <div class="trip-picker">
       <select id="tripSelect" aria-label="Escolher viagem"></select>
@@ -301,12 +305,14 @@ svg.world-bg path:hover{fill:rgba(201,162,77,0.35);}
 
   <div id="tabsWrap">
     <div class="tabs" id="tabs">
-      <div class="tab active" data-tab="painel">Painel</div>
-      <div class="tab" data-tab="roteiro">Roteiro &amp; Mapa</div>
-      <div class="tab" data-tab="reservas">Reservas</div>
-      <div class="tab" data-tab="despesas">Despesas</div>
-      <div class="tab" data-tab="saldo">Saldo</div>
-      <div class="tab" data-tab="orcamento">Orçamento</div>
+      <div class="tab active" data-tab="hoje" data-module="today">Hoje</div>
+      <div class="tab" data-tab="roteiro" data-module="locations">Locais &amp; Mapa</div>
+      <div class="tab" data-tab="reservas" data-module="bookings">Reservas</div>
+      <div class="tab" data-tab="preparacao" data-module="preparation">Preparação</div>
+      <div class="tab" data-tab="despesas" data-module="expenses">Despesas</div>
+      <div class="tab" data-tab="saldo" data-module="expenses">Saldo</div>
+      <div class="tab" data-tab="orcamento" data-module="budget">Orçamento</div>
+      <div class="tab" data-tab="painel" data-module="dashboard">Resumo</div>
     </div>
     <div class="panel" id="panelContent"></div>
   </div>
@@ -429,7 +435,7 @@ async function githubPut(body){
 
 let pushTimer = null;
 function schedulePush(){
-  if(!syncConfigured()) return;
+  if(!syncConfigured() || !navigator.onLine) return;
   clearTimeout(pushTimer);
   pushTimer = setTimeout(()=>{ pushToGitHub(); }, 1200);
 }
@@ -508,6 +514,9 @@ function blankTripData(info){
     bookings: [],
     people: [],
     advances: [],
+    tasks: [],
+    packingLists: [{id:uid(), name:'Mala principal', items:[]}],
+    modules: {today:true,locations:true,bookings:true,preparation:true,expenses:true,budget:true,dashboard:true},
     budgetCategories: CATEGORIES.map(c=>({key:c.key, planned:0})),
   };
 }
@@ -518,6 +527,10 @@ function ensureShape(data){
   if(!data.expenses) data.expenses = [];
   if(!data.people) data.people = [];
   if(!data.advances) data.advances = [];
+  if(!data.tasks) data.tasks = [];
+  if(!data.packingLists) data.packingLists = [{id:uid(), name:'Mala principal', items:[]}];
+  if(!data.modules) data.modules = {today:true,locations:true,bookings:true,preparation:true,expenses:true,budget:true,dashboard:true};
+  data.locations.forEach(l=>{ if(l.visited==null) l.visited=false; });
   data.expenses.forEach(e=>{
     if(!Array.isArray(e.fundAllocations)){
       e.fundAllocations = e.advanceId ? [{advanceId:e.advanceId, amount:Number(e.amount||0)}] : [];
@@ -533,7 +546,7 @@ const state = {
   trips: [],          // index list [{id,name,destination,startDate,endDate,currency,budgetTotal}]
   currentTripId: null,
   currentData: null,  // full data for current trip
-  activeTab: 'painel',
+  activeTab: 'hoje',
   charts: {},
   mapPopoverId: null,
   modalPendingXY: null,
@@ -574,6 +587,7 @@ function bindGlobalEvents(){
     state.currentTripId = e.target.value;
     state.currentData = ensureShape(await getTripData(state.currentTripId));
     renderHeader();
+    renderTabs();
     renderCurrentTab();
   });
   document.getElementById('tabs').addEventListener('click', (e)=>{
@@ -589,6 +603,9 @@ function bindGlobalEvents(){
   document.getElementById('syncSettingsBtn').addEventListener('click', openSyncModal);
   initTheme();
   document.getElementById('themeBtn').addEventListener('click', toggleTheme);
+  updateNetworkStatus();
+  window.addEventListener('online', ()=>{ updateNetworkStatus(); if(syncConfigured()) pushToGitHub(); });
+  window.addEventListener('offline', updateNetworkStatus);
   setSyncStatus(syncConfigured() ? (state.sync.statusMsg || 'Sincronização ativa') : 'Só neste dispositivo — liga o 🔗 Sincronizar para partilhar');
 }
 
@@ -703,7 +720,7 @@ function normalizeImportedTrip(tripData){
     if(e.paidBy && !peopleIds.has(e.paidBy)) e.paidBy = null;
     e.splitWith = (e.splitWith||[]).filter(id=>peopleIds.has(id));
   });
-  return tripData;
+  return ensureShape(tripData);
 }
 
 async function importTripData(e){
@@ -774,9 +791,17 @@ function renderHeader(){
 }
 
 function renderTabs(){
+  const modules=(state.currentData&&state.currentData.modules)||{};
   document.querySelectorAll('.tab').forEach(t=>{
+    const visible=!t.dataset.module || modules[t.dataset.module]!==false;
+    t.style.display=visible?'':'none';
     t.classList.toggle('active', t.dataset.tab === state.activeTab);
   });
+  const active=document.querySelector(`.tab[data-tab="${state.activeTab}"]`);
+  if(active && active.style.display==='none'){
+    const first=[...document.querySelectorAll('.tab')].find(t=>t.style.display!=='none');
+    if(first) state.activeTab=first.dataset.tab;
+  }
 }
 
 function escapeHtml(str){
@@ -795,6 +820,8 @@ function renderCurrentTab(){
       </div>`;
     return;
   }
+  if(state.activeTab === 'hoje') return renderToday(el);
+  if(state.activeTab === 'preparacao') return renderPreparation(el);
   if(state.activeTab === 'painel') return renderDashboard(el);
   if(state.activeTab === 'roteiro') return renderRoteiro(el);
   if(state.activeTab === 'reservas') return renderReservas(el);
@@ -802,6 +829,52 @@ function renderCurrentTab(){
   if(state.activeTab === 'saldo') return renderSaldo(el);
   if(state.activeTab === 'orcamento') return renderOrcamento(el);
 }
+
+
+function updateNetworkStatus(){
+  const el=document.getElementById('networkStatus'); if(!el)return;
+  const online=navigator.onLine;
+  el.classList.toggle('offline',!online);
+  el.textContent=online?'Disponível offline · ligação ativa':'Modo offline · alterações guardadas neste dispositivo';
+}
+function renderToday(el){
+  const d=state.currentData, today=todayLocalISO();
+  const datedBookings=d.bookings.filter(b=>b.dateFrom===today || b.dateTo===today).sort((a,b)=>(a.dateFrom||'').localeCompare(b.dateFrom||''));
+  const urgent=d.tasks.filter(t=>!t.done && (!t.dueDate || t.dueDate<=today)).sort((a,b)=>(a.dueDate||'9999').localeCompare(b.dueDate||'9999'));
+  const ideas=d.locations.filter(l=>!l.visited && (!l.day || l.day===today)).slice(0,8);
+  const fund=(d.advances||[]).reduce((sum,a)=>sum+advanceRemaining(a.id),0);
+  el.innerHTML=`
+    <div class="flex-head"><div><h2 class="section-title" style="margin-bottom:4px">Hoje</h2><div style="color:var(--text-dim);font-size:13px">Só mostramos o que tem hora, data ou precisa da tua atenção. O resto continua livre para improvisar.</div></div><button class="btn btn-primary" onclick="openLocationModal('create')">+ Guardar local</button></div>
+    <div class="quick-grid" style="margin-top:20px">
+      <div class="quick-card"><div class="kicker">Compromissos hoje</div><div class="big">${datedBookings.length}</div></div>
+      <div class="quick-card"><div class="kicker">Falta tratar</div><div class="big">${urgent.length}</div></div>
+      <div class="quick-card"><div class="kicker">Fundo disponível</div><div class="big">${fmtMoney(fund,d.info.currency)}</div></div>
+    </div>
+    <div class="chart-row">
+      <div class="list-card"><div class="flex-head"><h3 class="section-title">Transportes e reservas</h3><button class="btn btn-sm" onclick="state.activeTab='reservas';renderTabs();renderCurrentTab()">Ver carteira</button></div>${datedBookings.length?datedBookings.map(b=>`<div class="check-row"><div style="font-size:20px">${(BOOKING_CATEGORIES.find(c=>c.key===b.category)||BOOKING_CATEGORIES[4]).icon}</div><div class="check-main"><div class="check-title">${escapeHtml(b.provider||'Reserva')}</div><div class="check-meta">${b.code?`Código: <strong>${escapeHtml(b.code)}</strong>`:''} ${b.notes?`· ${escapeHtml(b.notes)}`:''}</div></div></div>`).join(''):'<div class="check-meta">Nenhum transporte ou reserva marcado para hoje.</div>'}</div>
+      <div class="list-card"><div class="flex-head"><h3 class="section-title">Falta tratar</h3><button class="btn btn-sm" onclick="openTaskModal()">+ Tarefa</button></div>${renderTaskRows(urgent)}</div>
+    </div>
+    <div class="list-card" style="margin-top:18px"><div class="flex-head"><h3 class="section-title">Ideias e locais por visitar</h3><button class="btn btn-sm" onclick="state.activeTab='roteiro';renderTabs();renderCurrentTab()">Ver todos</button></div>${ideas.length?ideas.map(renderInterestRow).join(''):'<div class="check-meta">Adiciona locais sem data para teres uma lista flexível de ideias.</div>'}</div>`;
+}
+function renderInterestRow(loc){
+ return `<div class="check-row ${loc.visited?'done':''}"><button class="round-check ${loc.visited?'checked':''}" onclick="toggleLocationVisited('${loc.id}')">${loc.visited?'✓':''}</button><div class="check-main"><div class="check-title">${escapeHtml(loc.name)}</div><div class="check-meta">${loc.address?escapeHtml(loc.address):'Local guardado'} ${loc.notes?'· '+escapeHtml(loc.notes):''}</div></div><button class="icon-btn" onclick="openLocationModal('edit','${loc.id}')">✎</button></div>`;
+}
+function toggleLocationVisited(id){const l=state.currentData.locations.find(x=>x.id===id);if(!l)return;l.visited=!l.visited;persistCurrentTrip();renderCurrentTab();}
+function renderTaskRows(tasks){return tasks.length?tasks.map(t=>`<div class="check-row ${t.done?'done':''}"><button class="round-check ${t.done?'checked':''}" onclick="toggleTask('${t.id}')">${t.done?'✓':''}</button><div class="check-main"><div class="check-title">${escapeHtml(t.title)}</div><div class="check-meta">${t.dueDate?'Até '+fmtDateShort(t.dueDate):'Sem prazo'}${t.owner?' · '+escapeHtml(t.owner):''}</div></div><button class="icon-btn" onclick="deleteTask('${t.id}')">🗑</button></div>`).join(''):'<div class="check-meta">Nada pendente.</div>'}
+function renderPreparation(el){
+ const d=state.currentData, pending=d.tasks.filter(t=>!t.done), done=d.tasks.filter(t=>t.done);
+ el.innerHTML=`<div class="flex-head"><div><h2 class="section-title" style="margin-bottom:4px">Preparação</h2><div class="check-meta">Tarefas e malas são opcionais e funcionam totalmente offline.</div></div><button class="btn btn-primary" onclick="openTaskModal()">+ Tarefa</button></div>
+ <div class="chart-row" style="margin-top:20px"><div class="list-card"><div class="flex-head"><h3 class="section-title">Falta tratar</h3></div>${renderTaskRows(pending)}${done.length?`<details style="margin-top:12px"><summary class="check-meta">${done.length} concluída(s)</summary>${renderTaskRows(done)}</details>`:''}</div>
+ <div class="list-card"><div class="flex-head"><h3 class="section-title">Listas da mala</h3><button class="btn btn-sm" onclick="addPackingList()">+ Lista</button></div>${d.packingLists.map(renderPackingList).join('')}</div></div>`;
+}
+function renderPackingList(list){const checked=list.items.filter(i=>i.done).length;return `<div style="margin-bottom:18px"><div class="flex-head"><div><strong>${escapeHtml(list.name)}</strong><div class="check-meta">${checked}/${list.items.length} preparados</div></div><button class="btn btn-sm" onclick="openPackingItemModal('${list.id}')">+ Item</button></div>${list.items.map(i=>`<div class="check-row ${i.done?'done':''}"><button class="round-check ${i.done?'checked':''}" onclick="togglePackingItem('${list.id}','${i.id}')">${i.done?'✓':''}</button><div class="check-main"><div class="check-title">${escapeHtml(i.name)}</div><div class="check-meta">${i.qty?`Quantidade: ${escapeHtml(i.qty)}`:''}${i.owner?` · ${escapeHtml(i.owner)}`:''}</div></div><button class="icon-btn" onclick="deletePackingItem('${list.id}','${i.id}')">🗑</button></div>`).join('')||'<div class="check-meta" style="padding:10px 0">Lista vazia.</div>'}</div>`}
+function openTaskModal(){openModal(`<h3>Nova tarefa</h3><div class="field"><label>O que falta tratar?</label><input id="t_title" placeholder="Ex: fazer check-in do voo"></div><div class="field-row"><div class="field"><label>Prazo (opcional)</label><input type="date" id="t_due"></div><div class="field"><label>Responsável (opcional)</label><input id="t_owner"></div></div><div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" id="saveTask">Adicionar</button></div>`);document.getElementById('saveTask').onclick=()=>{const title=document.getElementById('t_title').value.trim();if(!title)return;state.currentData.tasks.push({id:uid(),title,dueDate:document.getElementById('t_due').value,owner:document.getElementById('t_owner').value.trim(),done:false});persistCurrentTrip();closeModal();renderCurrentTab();};}
+function toggleTask(id){const t=state.currentData.tasks.find(x=>x.id===id);if(t){t.done=!t.done;persistCurrentTrip();renderCurrentTab();}}
+function deleteTask(id){state.currentData.tasks=state.currentData.tasks.filter(x=>x.id!==id);persistCurrentTrip();renderCurrentTab();}
+function addPackingList(){const name=prompt('Nome da lista:','Mochila');if(!name)return;state.currentData.packingLists.push({id:uid(),name,items:[]});persistCurrentTrip();renderCurrentTab();}
+function openPackingItemModal(listId){openModal(`<h3>Adicionar à mala</h3><div class="field"><label>Elemento</label><input id="p_name" placeholder="Ex: adaptador de tomada"></div><div class="field-row"><div class="field"><label>Quantidade (opcional)</label><input id="p_qty"></div><div class="field"><label>Responsável (opcional)</label><input id="p_owner"></div></div><div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" id="savePack">Adicionar</button></div>`);document.getElementById('savePack').onclick=()=>{const name=document.getElementById('p_name').value.trim();if(!name)return;const list=state.currentData.packingLists.find(x=>x.id===listId);list.items.push({id:uid(),name,qty:document.getElementById('p_qty').value.trim(),owner:document.getElementById('p_owner').value.trim(),done:false});persistCurrentTrip();closeModal();renderCurrentTab();};}
+function togglePackingItem(listId,id){const i=state.currentData.packingLists.find(x=>x.id===listId)?.items.find(x=>x.id===id);if(i){i.done=!i.done;persistCurrentTrip();renderCurrentTab();}}
+function deletePackingItem(listId,id){const l=state.currentData.packingLists.find(x=>x.id===listId);if(l){l.items=l.items.filter(x=>x.id!==id);persistCurrentTrip();renderCurrentTab();}}
 
 /* ============================= DASHBOARD ============================= */
 function renderDashboard(el){
@@ -921,11 +994,11 @@ function renderRoteiro(el){
   const dayKeys = Object.keys(grouped).sort();
 
   el.innerHTML = `
-    <h2 class="section-title">Roteiro &amp; Mapa</h2>
+    <h2 class="section-title">Locais de interesse &amp; Mapa</h2>
     <div class="itin-layout">
       <div>
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
-          <span style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-dim); text-transform:uppercase;">Paragens</span>
+          <span style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-dim); text-transform:uppercase;">Quero visitar</span>
           <button class="btn btn-sm btn-primary" onclick="openLocationModal('create')">+ Adicionar paragem</button>
         </div>
         <div id="itinList">
@@ -953,8 +1026,8 @@ function renderRoteiro(el){
 function renderLocItem(loc){
   const spend = state.currentData.expenses.filter(e=>e.locationId===loc.id).reduce((s,e)=>s+Number(e.amount||0),0);
   return `
-    <div class="loc-item">
-      <div class="loc-pin-num">${(loc.order!=null? loc.order+1 : '·')}</div>
+    <div class="loc-item ${loc.visited?'done':''}">
+      <button class="round-check ${loc.visited?'checked':''}" title="Marcar como visitado" onclick="toggleLocationVisited('${loc.id}')">${loc.visited?'✓':''}</button>
       <div class="loc-body">
         <div class="name">${loc.time ? `<span style="font-family:var(--font-mono); color:var(--gold); font-size:12.5px; margin-right:6px;">${loc.time}</span>` : ''}${escapeHtml(loc.name)}</div>
         ${loc.notes ? `<div class="notes">${escapeHtml(loc.notes)}</div>` : ''}
@@ -1417,6 +1490,7 @@ function renderOrcamento(el){
 async function persistCurrentTrip(){
   if(!state.currentTripId) return;
   await saveTripData(state.currentTripId, state.currentData);
+  setSyncStatus(syncConfigured() ? (navigator.onLine?'Alterações guardadas · sincronização pendente':'Modo offline · sincronizar mais tarde') : 'Guardado neste dispositivo');
   schedulePush();
 }
 async function updateTripIndexEntry(){
@@ -1441,7 +1515,7 @@ function closeModal(){ document.getElementById('modalRoot').innerHTML=''; state.
 
 function openTripModal(mode){
   const editing = mode==='edit';
-  const info = editing ? state.currentData.info : {name:'', destination:'', startDate:'', endDate:'', currency:'EUR', budgetTotal:0};
+  const info = editing ? {...state.currentData.info, modules:state.currentData.modules} : {name:'', destination:'', startDate:'', endDate:'', currency:'EUR', budgetTotal:0, modules:{today:true,locations:true,bookings:true,preparation:true,expenses:true,budget:true,dashboard:true}};
   openModal(`
     <h3>${editing ? 'Editar viagem' : 'Nova viagem'}</h3>
     <div class="field"><label>Nome da viagem</label><input id="f_name" value="${escapeHtml(info.name)}" placeholder="Ex: Japão em Outubro"></div>
@@ -1454,6 +1528,9 @@ function openTripModal(mode){
       <div class="field"><label>Moeda</label><select id="f_curr">${CURRENCIES.map(c=>`<option ${info.currency===c?'selected':''}>${c}</option>`).join('')}</select></div>
       <div class="field"><label>Orçamento total</label><input type="number" min="0" step="10" id="f_budget" value="${info.budgetTotal||0}"></div>
     </div>
+    <div class="field"><label>Módulos visíveis (podes alterar quando quiseres)</label><div class="module-grid">${[
+      ['today','Hoje'],['locations','Locais e mapa'],['bookings','Reservas'],['preparation','Preparação e mala'],['expenses','Despesas e saldo'],['budget','Orçamento'],['dashboard','Resumo e gráficos']
+    ].map(([k,l])=>`<label style="display:flex;align-items:center;gap:7px;font-size:13px"><input type="checkbox" class="module-toggle" value="${k}" ${(info.modules?info.modules[k]!==false:true)?'checked':''}> ${l}</label>`).join('')}</div></div>
     <div class="modal-actions">
       ${editing ? `<button class="btn btn-danger" id="deleteTripBtn" style="margin-right:auto;">Eliminar viagem</button>`:''}
       <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
@@ -1468,15 +1545,16 @@ function openTripModal(mode){
     const endDate = document.getElementById('f_end').value;
     const currency = document.getElementById('f_curr').value;
     const budgetTotal = Number(document.getElementById('f_budget').value)||0;
+    const modules={}; document.querySelectorAll('.module-toggle').forEach(x=>modules[x.value]=x.checked);
 
     if(editing){
-      Object.assign(state.currentData.info, {name, destination, startDate, endDate, currency, budgetTotal});
+      Object.assign(state.currentData.info, {name, destination, startDate, endDate, currency, budgetTotal}); state.currentData.modules=modules;
       await updateTripIndexEntry();
       await persistCurrentTrip();
     } else {
       const id = uid();
       const info = {id, name, destination, startDate, endDate, currency, budgetTotal};
-      const data = blankTripData(info);
+      const data = blankTripData(info); data.modules=modules;
       state.trips.push(pickIndexFields(info));
       await saveTripsIndex(state.trips);
       await saveTripData(id, data);
@@ -1486,6 +1564,7 @@ function openTripModal(mode){
     }
     closeModal();
     renderHeader();
+    renderTabs();
     renderCurrentTab();
   });
 }
@@ -1573,7 +1652,7 @@ function openLocationModal(mode, id){
       Object.assign(loc, {name, day, time, notes, address, x: xy?xy.x:null, y: xy?xy.y:null});
     } else {
       const order = state.currentData.locations.length;
-      state.currentData.locations.push({id:uid(), name, day, time, notes, address, x: xy?xy.x:null, y: xy?xy.y:null, order});
+      state.currentData.locations.push({id:uid(), name, day, time, notes, address, visited:false, x: xy?xy.x:null, y: xy?xy.y:null, order});
     }
     persistCurrentTrip();
     closeModal();
