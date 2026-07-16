@@ -1,34 +1,16 @@
-# Travel OS V2 — Sprint 1
+# Travel OS V2 — Sprint 2: locais e mapa
 
-Versão funcional inicial para GitHub Pages.
+Inclui:
 
-## Funcionalidades
+- Pesquisa de hotéis, restaurantes, aeroportos, estações e moradas através do OpenStreetMap/Nominatim.
+- Escolha entre vários resultados.
+- Criação manual de locais.
+- Mapa Leaflet com marcadores.
+- Locais reutilizáveis nos eventos.
+- Roteiro, reservas e locais continuam em IndexedDB.
+- Dados guardados disponíveis offline.
+- O mapa e novas pesquisas requerem internet.
 
-- Criar, abrir e apagar viagens.
-- Timeline por data e hora.
-- Eventos de voo, hotel, comboio, autocarro, restaurante, atividade, local, nota e outros.
-- Código de reserva opcional.
-- Local associado opcional.
-- Vistas Timeline, Reservas e Locais.
-- IndexedDB.
-- Eliminação lógica com `deletedAt`.
-- PWA e funcionamento offline.
-- Interface responsiva.
+## Publicar
 
-## Publicar no GitHub Pages
-
-1. Extrai o ZIP.
-2. Coloca todos os ficheiros na raiz do repositório.
-3. Faz commit e push para `main`.
-4. Em `Settings → Pages`, escolhe `Deploy from a branch`.
-5. Seleciona `main` e `/root`.
-
-## Nota
-
-Não abras diretamente com `file://`. Para testar localmente:
-
-```bash
-python -m http.server 8080
-```
-
-Depois abre `http://localhost:8080`.
+Extrai o ZIP para a raiz do repositório e faz commit/push. O GitHub Pages atualizará o site.

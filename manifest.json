@@ -1,7 +1,7 @@
 {
   "name": "Travel OS V2",
   "short_name": "Travel OS",
-  "description": "Gestão de viagens offline-first.",
+  "description": "Gestão de viagens offline-first com roteiro, reservas, locais e mapa.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

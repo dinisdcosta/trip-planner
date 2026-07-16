@@ -38,6 +38,23 @@ export async function deleteTrip(id){
   state.events=state.events.filter(x=>x.tripId!==id);
   if(state.activeTripId===id) closeTrip(); else notify();
 }
+export async function savePlace(data){
+  const rec=baseRecord({...data,id:data.id||crypto.randomUUID()});
+  await put("places",rec);
+  const i=state.places.findIndex(x=>x.id===rec.id);
+  if(i>=0) state.places[i]=rec; else state.places.push(rec);
+  notify();return rec;
+}
+export async function deletePlace(id){
+  const current=await get("places",id); if(!current) return;
+  const rec=baseRecord({...current,deletedAt:new Date().toISOString()});
+  await put("places",rec);
+  state.places=state.places.filter(x=>x.id!==id);
+  state.events=state.events.map(e=>e.placeId===id?{...e,placeId:""}:e);
+  notify();
+}
+export function placesForActiveTrip(){return state.places.filter(x=>x.tripId===state.activeTripId)}
+
 export async function saveEvent(data){
   const rec=baseRecord({...data,id:data.id||crypto.randomUUID()});
   await put("events",rec);
