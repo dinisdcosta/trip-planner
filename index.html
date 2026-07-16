@@ -1186,8 +1186,9 @@ function bookingLocationText(b){
   const z=state.currentData.locations.find(l=>l.id===b.arrivalLocationId);
   return [a?.name,z?.name].filter(Boolean).join(' → ');
 }
+function isBookingLocation(l){ return !!l.fromBooking || l.notes==='Local associado a uma reserva'; }
 function renderRoteiro(el){
-  const locs = [...state.currentData.locations];
+  const locs = state.currentData.locations.filter(l=>!isBookingLocation(l));
   const bookings=[...(state.currentData.bookings||[])];
   const events=[];
   locs.forEach(l=>events.push({kind:'location',date:l.day||'',time:l.time||'',sort:`${l.day||'9999-12-31'}T${l.time||'23:59'}`,data:l}));
@@ -1347,7 +1348,7 @@ function bookingLocationInputValue(id){return getLocationById(id)?.name||'';}
 function findOrCreateTypedLocation(name, note='Local associado a uma reserva'){
   name=String(name||'').trim();if(!name)return null;
   let loc=(state.currentData.locations||[]).find(l=>(l.name||'').trim().toLocaleLowerCase()===name.toLocaleLowerCase());
-  if(!loc){loc={id:uid(),name,address:'',day:'',time:'',notes:note,x:null,y:null,order:state.currentData.locations.length,visited:false};state.currentData.locations.push(loc);}
+  if(!loc){loc={id:uid(),name,address:'',day:'',time:'',notes:note,x:null,y:null,order:state.currentData.locations.length,visited:false,fromBooking:true};state.currentData.locations.push(loc);}
   return loc.id;
 }
 function mapXYFromCoords(lat, lon){
@@ -1367,7 +1368,7 @@ async function searchBookingPlace(kind){
     const r=rows[0], name=(r.name||r.display_name.split(',')[0]||q).trim();
     let loc=(state.currentData.locations||[]).find(l=>(l.name||'').toLocaleLowerCase()===name.toLocaleLowerCase()||(l.address||'')===r.display_name);
     const xy=mapXYFromCoords(r.lat,r.lon);
-    if(!loc){loc={id:uid(),name,address:r.display_name||'',day:'',time:'',notes:'Local associado a uma reserva',x:xy.x,y:xy.y,lat:Number(r.lat),lon:Number(r.lon),order:state.currentData.locations.length,visited:false};state.currentData.locations.push(loc);}
+    if(!loc){loc={id:uid(),name,address:r.display_name||'',day:'',time:'',notes:'Local associado a uma reserva',x:xy.x,y:xy.y,lat:Number(r.lat),lon:Number(r.lon),order:state.currentData.locations.length,visited:false,fromBooking:true};state.currentData.locations.push(loc);}
     else Object.assign(loc,{address:loc.address||r.display_name,x:xy.x,y:xy.y,lat:Number(r.lat),lon:Number(r.lon)});
     input.value=loc.name;input.dataset.locationId=loc.id;
     status.textContent=`Local encontrado: ${loc.name}. Será adicionado ao mapa.`;status.style.color='var(--sage)';
