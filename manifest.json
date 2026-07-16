@@ -1,0 +1,11 @@
+{
+  "name": "Travel OS V2",
+  "short_name": "Travel OS",
+  "description": "Gestão de viagens offline-first.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f7fb",
+  "theme_color": "#2f6fed",
+  "lang": "pt-PT"
+}
