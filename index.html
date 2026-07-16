@@ -1259,24 +1259,46 @@ function findOrCreateTypedLocation(name, note='Local associado a uma reserva'){
   if(!loc){loc={id:uid(),name,address:'',day:'',time:'',notes:note,x:null,y:null,order:state.currentData.locations.length,visited:false};state.currentData.locations.push(loc);}
   return loc.id;
 }
+function chooseBookingPlace(kind,r){
+  const input=document.getElementById(kind==='arrival'?'b_arrival_location_text':'b_location_text');
+  const status=document.getElementById(kind==='arrival'?'b_arrival_location_status':'b_location_status');
+  const results=document.getElementById(kind==='arrival'?'b_arrival_location_results':'b_location_results');
+  const typed=(input?.value||'').trim();
+  const name=(r.name||r.display_name?.split(',')[0]||typed).trim();
+  let loc=(state.currentData.locations||[]).find(l=>(l.name||'').toLocaleLowerCase()===name.toLocaleLowerCase()||(l.address||'')===r.display_name);
+  const xy=mapXYFromCoords(r.lat,r.lon);
+  if(!loc){loc={id:uid(),name,address:r.display_name||'',day:'',time:'',notes:'Local associado a uma reserva',x:xy.x,y:xy.y,lat:Number(r.lat),lon:Number(r.lon),order:state.currentData.locations.length,visited:false};state.currentData.locations.push(loc);}
+  else Object.assign(loc,{address:r.display_name||loc.address,x:xy.x,y:xy.y,lat:Number(r.lat),lon:Number(r.lon)});
+  input.value=loc.name;input.dataset.locationId=loc.id;
+  if(results)results.innerHTML='';
+  status.textContent=`Selecionado: ${loc.name}. Será mostrado no mapa e no roteiro.`;status.style.color='var(--sage)';
+}
 async function searchBookingPlace(kind){
   const input=document.getElementById(kind==='arrival'?'b_arrival_location_text':'b_location_text');
   const status=document.getElementById(kind==='arrival'?'b_arrival_location_status':'b_location_status');
+  const results=document.getElementById(kind==='arrival'?'b_arrival_location_results':'b_location_results');
   const q=(input?.value||'').trim();if(!q)return;
-  if(!navigator.onLine){status.textContent='Sem internet: o local será guardado pelo nome e poderá ser localizado no mapa mais tarde.';status.style.color='var(--gold)';return;}
-  status.textContent='A procurar…';status.style.color='var(--text-dim)';
+  if(results)results.innerHTML='';
+  if(!navigator.onLine){status.textContent='Sem internet: o nome será guardado e poderás localizar este local mais tarde.';status.style.color='var(--gold)';return;}
+  status.textContent='A procurar alojamentos, estabelecimentos e moradas…';status.style.color='var(--text-dim)';
   try{
-    const url=`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&addressdetails=1&q=${encodeURIComponent(q)}`;
-    const res=await fetch(url,{headers:{'Accept-Language':'pt-PT,pt;q=0.9,en;q=0.7'}});if(!res.ok)throw new Error(`HTTP ${res.status}`);
-    const rows=await res.json();if(!rows.length)throw new Error('Local não encontrado');
-    const r=rows[0], name=(r.name||r.display_name.split(',')[0]||q).trim();
-    let loc=(state.currentData.locations||[]).find(l=>(l.name||'').toLocaleLowerCase()===name.toLocaleLowerCase()||(l.address||'')===r.display_name);
-    const xy=mapXYFromCoords(r.lat,r.lon);
-    if(!loc){loc={id:uid(),name,address:r.display_name||'',day:'',time:'',notes:'Local associado a uma reserva',x:xy.x,y:xy.y,lat:Number(r.lat),lon:Number(r.lon),order:state.currentData.locations.length,visited:false};state.currentData.locations.push(loc);}
-    else Object.assign(loc,{address:loc.address||r.display_name,x:xy.x,y:xy.y,lat:Number(r.lat),lon:Number(r.lon)});
-    input.value=loc.name;input.dataset.locationId=loc.id;
-    status.textContent=`Local encontrado: ${loc.name}. Será adicionado ao mapa.`;status.style.color='var(--sage)';
-  }catch(e){status.textContent='Não foi possível localizar automaticamente. O nome será guardado na mesma.';status.style.color='var(--coral)';}
+    const queries=[q];
+    if(!/hotel|hostel|alojamento|apartamento|resort|guesthouse|pousada/i.test(q)) queries.push(`${q} hotel`);
+    let rows=[];
+    for(const query of queries){
+      const url=`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=8&addressdetails=1&namedetails=1&extratags=1&q=${encodeURIComponent(query)}`;
+      const res=await fetch(url,{headers:{'Accept-Language':'pt-PT,pt;q=0.9,en;q=0.7'}});if(!res.ok)continue;
+      const found=await res.json(); rows.push(...found);
+      if(rows.length>=5)break;
+    }
+    const seen=new Set(); rows=rows.filter(r=>{const k=`${r.osm_type||''}:${r.osm_id||r.place_id||r.display_name}`;if(seen.has(k))return false;seen.add(k);return true;}).slice(0,8);
+    if(!rows.length)throw new Error('Nenhum resultado encontrado');
+    if(results){
+      results.innerHTML=rows.map((r,i)=>`<button type="button" class="search-result" data-i="${i}"><strong>${escapeHtml(r.name||r.display_name.split(',')[0])}</strong><br><span>${escapeHtml(r.display_name)}</span></button>`).join('');
+      results.querySelectorAll('button').forEach(btn=>btn.onclick=()=>chooseBookingPlace(kind,rows[Number(btn.dataset.i)]));
+    }
+    status.textContent='Escolhe um dos resultados abaixo.';status.style.color='var(--text-dim)';
+  }catch(e){status.textContent='Não encontrei esse nome. Experimenta acrescentar a cidade ou o país; o texto pode ser guardado mesmo sem localização.';status.style.color='var(--coral)';}
 }
 function toggleBookingFlightFields(){const flight=document.getElementById('b_cat')?.value==='voo';document.querySelectorAll('.flight-only').forEach(x=>x.style.display=flight?'flex':'none');const arr=document.getElementById('arrivalLocationField');if(arr)arr.style.display=flight?'flex':'none';}
 function openBookingModal(mode,id,prefill=null){
@@ -1285,7 +1307,7 @@ function openBookingModal(mode,id,prefill=null){
  <div class="field flight-only"><label>Número do voo</label><input id="b_flight" value="${escapeHtml(b.flightNumber||'')}" placeholder="Ex: TP1358"></div><div id="flightLookupStatus" class="flight-only check-meta" style="margin:-6px 0 12px">Podes preencher manualmente ou usar “Importar confirmação”.</div>
  <div class="field"><label>Fornecedor / Companhia</label><input id="b_provider" value="${escapeHtml(b.provider||'')}" placeholder="Ex: TAP, Hotel Sakura"></div><div class="field"><label>Código de reserva (opcional)</label><input id="b_code" value="${escapeHtml(b.code||'')}"></div>
  <div class="field-row"><div class="field"><label>Data de início</label><input type="date" id="b_from" value="${b.dateFrom||''}"></div><div class="field"><label>Hora (opcional)</label><input type="time" id="b_time_from" value="${b.timeFrom||''}"></div></div><div class="field-row"><div class="field"><label>Data de fim (opcional)</label><input type="date" id="b_to" value="${b.dateTo||''}"></div><div class="field"><label>Hora de fim/chegada</label><input type="time" id="b_time_to" value="${b.timeTo||''}"></div></div>
- <div class="field"><label>Local de partida / local associado</label><div class="address-search"><input id="b_location_text" value="${escapeHtml(bookingLocationInputValue(b.locationId))}" data-location-id="${escapeHtml(b.locationId||'')}" placeholder="Ex: Aeroporto de Lisboa, Hotel Sakura"><button class="btn btn-sm" type="button" id="searchBookingLocationBtn">🔎 Localizar</button></div><div id="b_location_status" class="check-meta">Podes escrever qualquer local. “Localizar” adiciona-o ao mapa quando houver internet.</div></div><div class="field" id="arrivalLocationField"><label>Local de chegada</label><div class="address-search"><input id="b_arrival_location_text" value="${escapeHtml(bookingLocationInputValue(b.arrivalLocationId))}" data-location-id="${escapeHtml(b.arrivalLocationId||'')}" placeholder="Ex: Aeroporto de Istambul"><button class="btn btn-sm" type="button" id="searchBookingArrivalBtn">🔎 Localizar</button></div><div id="b_arrival_location_status" class="check-meta">Opcional. Útil para voos, comboios, autocarros e ferries.</div></div>
+ <div class="field"><label>Local de partida / local associado</label><div class="address-search"><input id="b_location_text" value="${escapeHtml(bookingLocationInputValue(b.locationId))}" data-location-id="${escapeHtml(b.locationId||'')}" placeholder="Ex: Aeroporto de Lisboa, Hotel Sakura"><button class="btn btn-sm" type="button" id="searchBookingLocationBtn">🔎 Localizar</button></div><div id="b_location_status" class="check-meta">Podes pesquisar pelo nome do alojamento, restaurante, aeroporto ou por uma morada.</div><div id="b_location_results" class="search-results"></div></div><div class="field" id="arrivalLocationField"><label>Local de chegada</label><div class="address-search"><input id="b_arrival_location_text" value="${escapeHtml(bookingLocationInputValue(b.arrivalLocationId))}" data-location-id="${escapeHtml(b.arrivalLocationId||'')}" placeholder="Ex: Aeroporto de Istambul"><button class="btn btn-sm" type="button" id="searchBookingArrivalBtn">🔎 Localizar</button></div><div id="b_arrival_location_status" class="check-meta">Opcional. Pesquisa pelo nome do aeroporto, estação ou estabelecimento.</div><div id="b_arrival_location_results" class="search-results"></div></div>
  <div class="field-row flight-only"><div class="field"><label>Terminal de partida</label><input id="b_dep_terminal" value="${escapeHtml(b.departureTerminal||'')}"></div><div class="field"><label>Terminal de chegada</label><input id="b_arr_terminal" value="${escapeHtml(b.arrivalTerminal||'')}"></div></div><div class="field flight-only"><label>Estado do voo</label><input id="b_status" value="${escapeHtml(b.flightStatus||'')}"></div>
  <div class="field"><label>Link (opcional)</label><input id="b_link" value="${escapeHtml(b.link||'')}"></div><div class="field"><label>Notas (opcional)</label><textarea id="b_notes" rows="2">${escapeHtml(b.notes||'')}</textarea></div><div class="modal-actions">${editing?`<button class="btn btn-danger" style="margin-right:auto" onclick="deleteBooking('${id}');closeModal()">Eliminar</button>`:''}<button class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" id="saveBookingBtn">${editing?'Guardar':'Adicionar'}</button></div>`);
  document.getElementById('b_cat').onchange=toggleBookingFlightFields;document.getElementById('searchBookingLocationBtn').onclick=()=>searchBookingPlace('departure');document.getElementById('searchBookingArrivalBtn').onclick=()=>searchBookingPlace('arrival');const importBtn=document.getElementById('importReservationBtn');if(importBtn)importBtn.onclick=openReservationImportModal;toggleBookingFlightFields();if(prefill)applyParsedReservation(prefill);
