@@ -518,7 +518,12 @@ function ensureShape(data){
   if(!data.expenses) data.expenses = [];
   if(!data.people) data.people = [];
   if(!data.advances) data.advances = [];
-  data.expenses.forEach(e=>{ if(e.advanceId===undefined) e.advanceId=null; });
+  data.expenses.forEach(e=>{
+    if(!Array.isArray(e.fundAllocations)){
+      e.fundAllocations = e.advanceId ? [{advanceId:e.advanceId, amount:Number(e.amount||0)}] : [];
+    }
+    e.advanceId = null; // campo antigo mantido apenas para compatibilidade de importação
+  });
   if(!data.budgetCategories) data.budgetCategories = CATEGORIES.map(c=>({key:c.key, planned:0}));
   return data;
 }
@@ -1139,13 +1144,16 @@ function renderTicket(e){
   const c = catInfo(e.categoryKey);
   const loc = state.currentData.locations.find(l=>l.id===e.locationId);
   const payerName = e.paidBy ? personName(e.paidBy) : null;
-  const fund = e.advanceId ? (state.currentData.advances||[]).find(a=>a.id===e.advanceId) : null;
+  const fundNames=(e.fundAllocations||[]).map(x=>(state.currentData.advances||[]).find(a=>a.id===x.advanceId)).filter(Boolean).map(a=>a.label);
+  const fundTotal=(e.fundAllocations||[]).reduce((sum,x)=>sum+Number(x.amount||0),0);
+  const personalAmount=Math.max(0,Number(e.amount||0)-fundTotal);
+  const paymentMeta = fundNames.length ? ` · fundo automático: ${escapeHtml(fundNames.join(' + '))}${personalAmount>0.001&&payerName?' + '+escapeHtml(payerName):''}` : (payerName ? ' · por '+escapeHtml(payerName) : '');
   return `
     <div class="ticket">
       <div class="cat-chip" style="background:${c.color}22; border:1px solid ${c.color}55;">${c.icon}</div>
       <div class="info">
         <div class="desc">${escapeHtml(e.description || c.label)}</div>
-        <div class="meta">${e.date ? fmtDateShort(e.date) : 'Sem data'} · ${c.label}${loc ? ' · '+escapeHtml(loc.name) : ''}${payerName ? ' · por '+escapeHtml(payerName) : ''}${fund ? ' · fundo '+escapeHtml(fund.label) : ''}</div>
+        <div class="meta">${e.date ? fmtDateShort(e.date) : 'Sem data'} · ${c.label}${loc ? ' · '+escapeHtml(loc.name) : ''}${paymentMeta}</div>
       </div>
       <div class="amount">${fmtMoney(e.amount, state.currentData.info.currency)}</div>
       <div class="actions">
@@ -1167,10 +1175,32 @@ function personName(id){
   return p ? p.name : null;
 }
 
-function advanceUsage(){
+function advanceUsage(excludeExpenseId=null){
   const usage={}; (state.currentData.advances||[]).forEach(a=>usage[a.id]=0);
-  state.currentData.expenses.forEach(e=>{ if(e.advanceId && usage.hasOwnProperty(e.advanceId)) usage[e.advanceId]+=Number(e.amount||0); });
+  state.currentData.expenses.forEach(e=>{
+    if(e.id===excludeExpenseId) return;
+    (e.fundAllocations||[]).forEach(x=>{
+      if(usage.hasOwnProperty(x.advanceId)) usage[x.advanceId]+=Number(x.amount||0);
+    });
+  });
   return usage;
+}
+function allocateFundsAutomatically(amount, excludeExpenseId=null){
+  let remaining=round2(Number(amount||0));
+  const usage=advanceUsage(excludeExpenseId);
+  const funds=[...(state.currentData.advances||[])].sort((a,b)=>
+    String(a.date||'9999-12-31').localeCompare(String(b.date||'9999-12-31'))
+  );
+  const allocations=[];
+  for(const fund of funds){
+    if(remaining<=0.001) break;
+    const available=Math.max(0, round2(Number(fund.amount||0)-Number(usage[fund.id]||0)));
+    if(available<=0.001) continue;
+    const used=round2(Math.min(available,remaining));
+    allocations.push({advanceId:fund.id, amount:used});
+    remaining=round2(remaining-used);
+  }
+  return {allocations, personalAmount:Math.max(0,remaining)};
 }
 function computeBalances(){
   const people = state.currentData.people;
@@ -1179,13 +1209,23 @@ function computeBalances(){
   let unassignedCount = 0, unassignedTotal = 0;
   const advancesById=Object.fromEntries((state.currentData.advances||[]).map(a=>[a.id,a]));
   state.currentData.expenses.forEach(e=>{
-    let effectivePayer=e.paidBy;
-    if(e.advanceId && advancesById[e.advanceId]) effectivePayer=advancesById[e.advanceId].ownerId;
-    if(!effectivePayer || !paid.hasOwnProperty(effectivePayer)){ unassignedCount++; unassignedTotal += Number(e.amount||0); return; }
-    paid[effectivePayer] += Number(e.amount||0);
+    const total=Number(e.amount||0);
+    let fundedAmount=0;
+    (e.fundAllocations||[]).forEach(x=>{
+      const fund=advancesById[x.advanceId], value=Number(x.amount||0);
+      if(fund && paid.hasOwnProperty(fund.ownerId)){
+        paid[fund.ownerId]+=value;
+        fundedAmount+=value;
+      }
+    });
+    const personalAmount=Math.max(0,round2(total-fundedAmount));
+    if(personalAmount>0.001){
+      if(e.paidBy && paid.hasOwnProperty(e.paidBy)) paid[e.paidBy]+=personalAmount;
+      else { unassignedCount++; unassignedTotal+=personalAmount; }
+    }
     const participants = (e.splitWith && e.splitWith.length) ? e.splitWith.filter(id=>owed.hasOwnProperty(id)) : people.map(p=>p.id);
     if(!participants.length) return;
-    const share = Number(e.amount||0) / participants.length;
+    const share = total / participants.length;
     participants.forEach(id=>{ owed[id] += share; });
   });
   (state.currentData.advances||[]).forEach(a=>{ if(funded.hasOwnProperty(a.ownerId)) funded[a.ownerId]+=Number(a.amount||0); });
@@ -1259,7 +1299,7 @@ function openAdvanceModal(){
   document.getElementById('saveAdvanceBtn').onclick=()=>{const amount=Number(document.getElementById('a_amount').value);if(amount<=0){alert('Indica um valor válido.');return;}state.currentData.advances.push({id:uid(),label:document.getElementById('a_label').value.trim()||'Fundo de viagem',amount,date:document.getElementById('a_date').value,ownerId:document.getElementById('a_owner').value});persistCurrentTrip();closeModal();renderSaldo(document.getElementById('panelContent'));};
 }
 function deleteAdvance(id){
-  if(state.currentData.expenses.some(e=>e.advanceId===id)){alert('Este fundo já está associado a despesas. Altera primeiro essas despesas.');return;}
+  if(state.currentData.expenses.some(e=>(e.fundAllocations||[]).some(x=>x.advanceId===id))){alert('Este fundo já foi usado automaticamente em despesas. Elimina ou edita primeiro essas despesas.');return;}
   if(!confirm('Eliminar este fundo?'))return; state.currentData.advances=state.currentData.advances.filter(a=>a.id!==id);persistCurrentTrip();renderSaldo(document.getElementById('panelContent'));
 }
 
@@ -1550,7 +1590,7 @@ function drawSelectedGeocodePin(){const mini=document.getElementById('miniMap');
 
 function openExpenseModal(mode, id){
   const editing = mode==='edit';
-  const exp = editing ? state.currentData.expenses.find(e=>e.id===id) : {date:'', categoryKey:CATEGORIES[0].key, description:'', amount:'', locationId:'', paidBy:'', splitWith:[], advanceId:null};
+  const exp = editing ? state.currentData.expenses.find(e=>e.id===id) : {date:'', categoryKey:CATEGORIES[0].key, description:'', amount:'', locationId:'', paidBy:'', splitWith:[], fundAllocations:[]};
   const locs = state.currentData.locations;
   const people = state.currentData.people;
   const splitWith = exp.splitWith && exp.splitWith.length ? exp.splitWith : people.map(p=>p.id);
@@ -1572,7 +1612,7 @@ function openExpenseModal(mode, id){
       </div>
     </div>
     ${people.length ? `
-      ${(state.currentData.advances||[]).length ? `<div class="field"><label>Origem do pagamento</label><select id="e_advance"><option value="">Carteira pessoal</option>${state.currentData.advances.map(a=>`<option value="${a.id}" ${exp.advanceId===a.id?'selected':''}>Fundo: ${escapeHtml(a.label)}</option>`).join('')}</select><p style="font-size:11.5px;color:var(--text-dim);margin:2px 0 0;">Ao escolher um fundo, o crédito fica para quem o financiou; esta despesa reduz o saldo disponível do fundo.</p></div>` : ''}
+      ${(state.currentData.advances||[]).length ? `<div class="field"><div style="padding:11px 12px;border:1px solid var(--border);border-radius:8px;background:var(--panel-alt);font-size:12px;color:var(--text-dim);line-height:1.5;"><strong style="color:var(--text)">Uso automático do Fundo de viagem</strong><br>Esta despesa utilizará automaticamente todo o saldo disponível, começando pelo fundo mais antigo. Só o valor que faltar será atribuído à carteira pessoal.</div></div>` : ''}
       <div class="field"><label>Pago/realizado por</label>
         <select id="e_paidby"><option value="">— não especificado —</option>${people.map(p=>`<option value="${p.id}" ${exp.paidBy===p.id?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}</select>
       </div>
@@ -1605,10 +1645,11 @@ function openExpenseModal(mode, id){
       amount,
       locationId: document.getElementById('e_loc').value || null,
       paidBy: paidByEl ? (paidByEl.value || null) : null,
-      advanceId: document.getElementById('e_advance') ? (document.getElementById('e_advance').value || null) : null,
       splitWith: splitEls ? [...splitEls].map(el=>el.value) : [],
     };
-    if(payload.advanceId){ const a=state.currentData.advances.find(x=>x.id===payload.advanceId); const used=(advanceUsage()[payload.advanceId]||0)-(editing&&exp.advanceId===payload.advanceId?Number(exp.amount||0):0); if(a && used+amount>Number(a.amount||0)+0.001){ alert('Este fundo não tem saldo suficiente para esta despesa.'); return; } }
+    const autoPayment=allocateFundsAutomatically(amount, editing ? exp.id : null);
+    payload.fundAllocations=autoPayment.allocations;
+    if(autoPayment.personalAmount<=0.001) payload.paidBy=null;
     if(editing){ Object.assign(exp, payload); }
     else { state.currentData.expenses.push({id:uid(), ...payload}); }
     persistCurrentTrip();
