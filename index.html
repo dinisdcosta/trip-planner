@@ -440,39 +440,106 @@ function schedulePush(){
   pushTimer = setTimeout(()=>{ pushToGitHub(); }, 1200);
 }
 
+function mergeRecords(remoteList, localList){
+  const merged = new Map();
+  for(const item of (remoteList || [])){
+    if(item && item.id != null) merged.set(String(item.id), item);
+  }
+  for(const item of (localList || [])){
+    if(item && item.id != null) merged.set(String(item.id), item);
+  }
+  return [...merged.values()];
+}
+function mergeTripData(remoteData, localData){
+  if(!remoteData) return ensureShape(localData);
+  if(!localData) return ensureShape(remoteData);
+  const merged = {...remoteData, ...localData};
+  for(const key of ['locations','expenses','bookings','people','advances','tasks','packingLists','budgetCategories']){
+    merged[key] = mergeRecords(remoteData[key], localData[key]);
+  }
+  return ensureShape(merged);
+}
+function mergeSyncPayload(remote, local){
+  const remoteTrips = remote?.trips || [];
+  const localTrips = local?.trips || [];
+  const trips = mergeRecords(remoteTrips, localTrips);
+  const tripsData = {};
+  const ids = new Set([
+    ...Object.keys(remote?.tripsData || {}),
+    ...Object.keys(local?.tripsData || {}),
+    ...trips.map(t=>String(t.id))
+  ]);
+  for(const id of ids){
+    tripsData[id] = mergeTripData(remote?.tripsData?.[id], local?.tripsData?.[id]);
+  }
+  return {updatedAt:new Date().toISOString(), trips, tripsData};
+}
+async function buildLocalSyncPayload(){
+  const tripsData = {};
+  for(const t of state.trips){
+    tripsData[t.id] = (t.id===state.currentTripId) ? state.currentData : await getTripData(t.id);
+  }
+  return {updatedAt:new Date().toISOString(), trips:state.trips, tripsData};
+}
 async function pushToGitHub(){
-  if(!syncConfigured()) return;
-  setSyncStatus('A enviar…');
+  if(!syncConfigured()) return false;
+  if(!navigator.onLine){ setSyncStatus('Modo offline · sincronizar mais tarde'); return false; }
+  setSyncStatus('A sincronizar…');
   try{
-    const getRes = await githubGet();
-    let sha;
-    if(getRes.status===200){ const j = await getRes.json(); sha = j.sha; }
-    else if(getRes.status!==404){ throw new Error('Erro HTTP '+getRes.status+' ao ler o ficheiro remoto'); }
+    let localPayload = await buildLocalSyncPayload();
+    const maxAttempts = 3;
+    for(let attempt=1; attempt<=maxAttempts; attempt++){
+      const getRes = await githubGet();
+      let sha = null;
+      let remotePayload = null;
+      if(getRes.status===200){
+        const remoteFile = await getRes.json();
+        sha = remoteFile.sha;
+        try{ remotePayload = JSON.parse(base64ToUtf8(remoteFile.content)); }
+        catch(e){ throw new Error('O ficheiro remoto não contém dados válidos da aplicação.'); }
+      } else if(getRes.status!==404){
+        const j = await getRes.json().catch(()=>({}));
+        throw new Error(j.message || ('Erro HTTP '+getRes.status+' ao ler o ficheiro remoto'));
+      }
 
-    const tripsData = {};
-    for(const t of state.trips){
-      tripsData[t.id] = (t.id===state.currentTripId) ? state.currentData : await getTripData(t.id);
+      const payload = mergeSyncPayload(remotePayload, localPayload);
+      const body = {
+        message:'Atualizar diário de viagem — '+new Date().toLocaleString('pt-PT'),
+        content:utf8ToBase64(JSON.stringify(payload, null, 2)),
+        branch:state.sync.branch || 'main'
+      };
+      if(sha) body.sha = sha;
+
+      const putRes = await githubPut(body);
+      if(putRes.ok){
+        const putJson = await putRes.json();
+        state.sync.sha = putJson.content.sha;
+        state.sync.lastSyncedAt = new Date().toISOString();
+        state.trips = payload.trips;
+        await saveTripsIndex(payload.trips);
+        for(const [id,data] of Object.entries(payload.tripsData)) await saveTripData(id, data);
+        if(state.currentTripId && payload.tripsData[state.currentTripId]) state.currentData = payload.tripsData[state.currentTripId];
+        await saveSyncSettings();
+        setSyncStatus('Sincronizado às '+new Date().toLocaleTimeString('pt-PT'));
+        return true;
+      }
+
+      const errJson = await putRes.json().catch(()=>({}));
+      const msg = errJson.message || ('Erro HTTP '+putRes.status);
+      const isConflict = putRes.status===409 || putRes.status===422 || /does not match|sha/i.test(msg);
+      if(isConflict && attempt<maxAttempts){
+        setSyncStatus('Foram encontradas alterações noutro dispositivo · a combinar…');
+        localPayload = payload;
+        continue;
+      }
+      throw new Error(msg);
     }
-    const payload = { updatedAt: new Date().toISOString(), trips: state.trips, tripsData };
-    const body = {
-      message: 'Atualizar diário de viagem — ' + new Date().toLocaleString('pt-PT'),
-      content: utf8ToBase64(JSON.stringify(payload, null, 2)),
-      branch: state.sync.branch || 'main',
-    };
-    if(sha) body.sha = sha;
-    const putRes = await githubPut(body);
-    if(!putRes.ok){ const j = await putRes.json().catch(()=>({})); throw new Error(j.message || ('Erro HTTP '+putRes.status)); }
-    const putJson = await putRes.json();
-    state.sync.sha = putJson.content.sha;
-    state.sync.lastSyncedAt = new Date().toISOString();
-    await saveSyncSettings();
-    setSyncStatus('Sincronizado às ' + new Date().toLocaleTimeString('pt-PT'));
   }catch(err){
     console.error(err);
-    setSyncStatus('Falha ao sincronizar: ' + err.message);
+    setSyncStatus('Falha ao sincronizar: '+err.message);
+    return false;
   }
 }
-
 async function pullFromGitHub(){
   if(!syncConfigured()) return false;
   setSyncStatus('A ler dados partilhados…');
