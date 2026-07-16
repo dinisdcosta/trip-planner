@@ -498,7 +498,19 @@ async function buildLocalSyncPayload(){
   }
   return {updatedAt:new Date().toISOString(), trips:state.trips, tripsData, deletedTripIds: state.deletedTripIds || []};
 }
-async function pushToGitHub(){
+// Garante que nunca há um push e um pull (ou dois pushes/pulls) em curso ao mesmo
+// tempo neste dispositivo — evita conflitos de "sha" causados por duas chamadas a
+// lerem o ficheiro remoto e tentarem escrever por cima uma da outra.
+let syncChain = Promise.resolve();
+function runSyncExclusive(fn){
+  const result = syncChain.then(fn, fn);
+  syncChain = result.then(()=>{}, ()=>{});
+  return result;
+}
+async function pushToGitHub(){ return runSyncExclusive(pushToGitHubImpl); }
+async function pullFromGitHub(){ return runSyncExclusive(pullFromGitHubImpl); }
+
+async function pushToGitHubImpl(){
   if(!syncConfigured()) return false;
   if(!navigator.onLine){ setSyncStatus('Modo offline · sincronizar mais tarde'); return false; }
   setSyncStatus('A sincronizar…');
@@ -566,7 +578,7 @@ async function pushToGitHub(){
     return false;
   }
 }
-async function pullFromGitHub(){
+async function pullFromGitHubImpl(){
   if(!syncConfigured()) return false;
   if(!navigator.onLine){ setSyncStatus('Modo offline · sincronizar mais tarde'); return false; }
   setSyncStatus('A ler dados partilhados…');
