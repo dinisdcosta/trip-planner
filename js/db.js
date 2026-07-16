@@ -1,78 +1,59 @@
-const DB_NAME = "travel-os-v2";
-const DB_VERSION = 1;
-
+const DB_NAME="travel-os-v2";
+const DB_VERSION=2;
 let dbPromise;
 
-export function openDatabase() {
-  if (!("indexedDB" in window)) {
-    return Promise.reject(new Error("IndexedDB não está disponível neste navegador."));
-  }
-
-  if (!dbPromise) {
-    dbPromise = new Promise((resolve, reject) => {
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
-
-      request.onupgradeneeded = () => {
-        const db = request.result;
-
-        if (!db.objectStoreNames.contains("trips")) {
-          const trips = db.createObjectStore("trips", { keyPath: "id" });
-          trips.createIndex("updatedAt", "updatedAt");
-          trips.createIndex("deletedAt", "deletedAt");
-        }
-
-        if (!db.objectStoreNames.contains("syncQueue")) {
-          const queue = db.createObjectStore("syncQueue", { keyPath: "id" });
-          queue.createIndex("createdAt", "createdAt");
-        }
-
-        if (!db.objectStoreNames.contains("settings")) {
-          db.createObjectStore("settings", { keyPath: "key" });
-        }
+export function openDatabase(){
+  if(!("indexedDB" in window)) return Promise.reject(new Error("IndexedDB indisponível."));
+  if(!dbPromise){
+    dbPromise=new Promise((resolve,reject)=>{
+      const req=indexedDB.open(DB_NAME,DB_VERSION);
+      req.onupgradeneeded=()=>{
+        const db=req.result;
+        const ensure=(name,keyPath="id")=>{
+          if(!db.objectStoreNames.contains(name)) db.createObjectStore(name,{keyPath});
+        };
+        ensure("trips");
+        ensure("events");
+        ensure("places");
+        ensure("settings","key");
+        ensure("syncQueue");
       };
-
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error ?? new Error("Falha ao abrir IndexedDB."));
-      request.onblocked = () => reject(new Error("A base de dados está bloqueada por outro separador."));
+      req.onsuccess=()=>resolve(req.result);
+      req.onerror=()=>reject(req.error);
+      req.onblocked=()=>reject(new Error("Base de dados bloqueada."));
     });
   }
-
   return dbPromise;
 }
 
-function transactionDone(transaction) {
-  return new Promise((resolve, reject) => {
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error);
-    transaction.onabort = () => reject(transaction.error ?? new Error("Transação cancelada."));
-  });
-}
+function txDone(tx){return new Promise((resolve,reject)=>{tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);});}
 
-export async function putRecord(storeName, record) {
-  const db = await openDatabase();
-  const tx = db.transaction(storeName, "readwrite");
-  tx.objectStore(storeName).put(record);
-  await transactionDone(tx);
+export async function put(store,record){
+  const db=await openDatabase();
+  const tx=db.transaction(store,"readwrite");
+  tx.objectStore(store).put(record);
+  await txDone(tx);
   return record;
 }
-
-export async function getAllRecords(storeName) {
-  const db = await openDatabase();
-  const tx = db.transaction(storeName, "readonly");
-  const request = tx.objectStore(storeName).getAll();
-
-  const result = await new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-
-  await transactionDone(tx);
-  return result;
+export async function getAll(store){
+  const db=await openDatabase();
+  const tx=db.transaction(store,"readonly");
+  const req=tx.objectStore(store).getAll();
+  const rows=await new Promise((resolve,reject)=>{req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});
+  await txDone(tx);
+  return rows;
 }
-
-export async function clearStore(storeName) {
-  const db = await openDatabase();
-  const tx = db.transaction(storeName, "readwrite");
-  tx.objectStore(storeName).clear();
-  await transactionDone(tx);
+export async function get(store,id){
+  const db=await openDatabase();
+  const tx=db.transaction(store,"readonly");
+  const req=tx.objectStore(store).get(id);
+  const row=await new Promise((resolve,reject)=>{req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});
+  await txDone(tx);
+  return row;
+}
+export async function remove(store,id){
+  const db=await openDatabase();
+  const tx=db.transaction(store,"readwrite");
+  tx.objectStore(store).delete(id);
+  await txDone(tx);
 }
