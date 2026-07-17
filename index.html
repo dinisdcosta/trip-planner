@@ -1084,11 +1084,119 @@ function updateNetworkStatus(){
   el.classList.toggle('offline',!online);
   el.textContent=online?'Disponível offline · ligação ativa':'Modo offline · alterações guardadas neste dispositivo';
 }
+function tripPhase(info, today){
+  if(!info.startDate || !info.endDate) return 'unknown';
+  if(today < info.startDate) return 'upcoming';
+  if(today > info.endDate) return 'past';
+  return 'active';
+}
+function daysUntil(dateStr, todayStr){
+  const [y1,m1,d1]=todayStr.split('-').map(Number);
+  const [y2,m2,d2]=dateStr.split('-').map(Number);
+  return Math.round((new Date(y2,m2-1,d2) - new Date(y1,m1-1,d1))/86400000);
+}
+function dayAgenda(d, dateStr){
+  const items = [
+    ...d.bookings.filter(b=>b.dateFrom===dateStr || b.dateTo===dateStr).map(b=>({kind:'booking', sort:bookingSortKey(b), data:b})),
+    ...d.locations.filter(l=>l.day===dateStr).map(l=>({kind:'location', sort:`${l.day}T${l.time||'12:00'}`, data:l})),
+  ];
+  items.sort((a,b)=>a.sort.localeCompare(b.sort));
+  return items;
+}
+function renderAgendaRow(item){
+  if(item.kind==='booking'){
+    const b=item.data, c=(BOOKING_CATEGORIES.find(x=>x.key===b.category)||BOOKING_CATEGORIES[4]);
+    return `<div class="check-row"><div style="font-size:20px">${c.icon}</div><div class="check-main"><div class="check-title">${b.timeFrom?escapeHtml(b.timeFrom)+' · ':''}${escapeHtml(b.provider||'Reserva')}${b.flightNumber?' · '+escapeHtml(b.flightNumber):''}</div><div class="check-meta">${bookingLocationText(b)?escapeHtml(bookingLocationText(b))+' · ':''}${b.code?`Código: <strong>${escapeHtml(b.code)}</strong>`:''} ${b.notes?`· ${escapeHtml(b.notes)}`:''}</div></div></div>`;
+  }
+  const l=item.data;
+  return `<div class="check-row ${l.visited?'done':''}"><button class="round-check ${l.visited?'checked':''}" onclick="toggleLocationVisited('${l.id}')">${l.visited?'✓':''}</button><div class="check-main"><div class="check-title">${l.time?escapeHtml(l.time)+' · ':''}${escapeHtml(l.name)}</div><div class="check-meta">${l.notes?escapeHtml(l.notes):(l.address?escapeHtml(l.address):'Local planeado')}</div></div></div>`;
+}
+function packingProgress(d){
+  let total=0, done=0;
+  (d.packingLists||[]).forEach(list=>{ total+=list.items.length; done+=list.items.filter(i=>i.done).length; });
+  return {total, done, pct: total? Math.round(done/total*100) : null};
+}
 function renderToday(el){
-  const d=state.currentData, today=todayLocalISO();
-  const datedBookings=d.bookings.filter(b=>b.dateFrom===today || b.dateTo===today).sort((a,b)=>bookingSortKey(a).localeCompare(bookingSortKey(b)));
+  const d=state.currentData, info=d.info, today=todayLocalISO();
+  const phase = tripPhase(info, today);
   const urgent=d.tasks.filter(t=>!t.done && (!t.dueDate || t.dueDate<=today)).sort((a,b)=>(a.dueDate||'9999').localeCompare(b.dueDate||'9999'));
   const ideas=d.locations.filter(l=>!l.visited && (!l.day || l.day===today)).slice(0,8);
+
+  if(phase==='upcoming'){
+    const daysToGo = daysUntil(info.startDate, today);
+    const upcoming = [...d.bookings].sort((a,b)=>bookingSortKey(a).localeCompare(bookingSortKey(b))).slice(0,5);
+    const totalSpent = d.expenses.reduce((s,e)=>s+Number(e.amount||0),0);
+    const bookingSpend = d.expenses.filter(e=>e.bookingId).reduce((s,e)=>s+Number(e.amount||0),0);
+    const totalBudget = Number(info.budgetTotal||0);
+    const pack = packingProgress(d);
+    el.innerHTML=`
+      <div class="flex-head"><div><h2 class="section-title" style="margin-bottom:4px">Hoje</h2><div style="color:var(--text-dim);font-size:13px">A viagem ainda não começou — aqui está o panorama geral para chegares preparado.</div></div><button class="btn btn-primary" onclick="openLocationModal('create')">+ Guardar local</button></div>
+      <div class="hero-progress" style="padding:16px 22px; margin-top:20px;">
+        <div class="desc" style="min-width:0;">
+          <h3 style="font-size:17px;">🗓️ Faltam ${daysToGo} dia(s) para "${escapeHtml(info.destination||info.name||'a viagem')}"</h3>
+          <p>${info.startDate?fmtDateShort(info.startDate):''}${info.endDate?' → '+fmtDateShort(info.endDate):''}${bookingSpend>0.005?` · já tens ${fmtMoney(bookingSpend, info.currency)} comprometidos em reservas${totalBudget>0?` (${Math.round(bookingSpend/totalBudget*100)}% do orçamento)`:''}.`:'.'}</p>
+        </div>
+      </div>
+      <div class="quick-grid">
+        <div class="quick-card"><div class="kicker">Tarefas por fazer</div><div class="big">${urgent.length}</div></div>
+        <div class="quick-card"><div class="kicker">Já gasto/comprometido</div><div class="big">${fmtMoney(totalSpent, info.currency)}</div></div>
+        <div class="quick-card"><div class="kicker">Mala preparada</div><div class="big">${pack.pct!=null?pack.pct+'%':'—'}</div></div>
+      </div>
+      <div class="chart-row">
+        <div class="list-card"><div class="flex-head"><h3 class="section-title">Falta tratar</h3><button class="btn btn-sm" onclick="openTaskModal()">+ Tarefa</button></div>${renderTaskRows(urgent)}</div>
+        <div class="list-card"><div class="flex-head"><h3 class="section-title">Próximas reservas</h3><button class="btn btn-sm" onclick="state.activeTab='reservas';renderTabs();renderCurrentTab()">Ver carteira</button></div>${upcoming.length?upcoming.map(b=>renderAgendaRow({kind:'booking',data:b})).join(''):'<div class="check-meta">Ainda sem reservas guardadas.</div>'}</div>
+      </div>
+      <div class="list-card" style="margin-top:18px"><div class="flex-head"><h3 class="section-title">Ideias e locais por visitar</h3><button class="btn btn-sm" onclick="state.activeTab='roteiro';renderTabs();renderCurrentTab()">Ver todos</button></div>${ideas.length?ideas.map(renderInterestRow).join(''):'<div class="check-meta">Adiciona locais sem data para teres uma lista flexível de ideias.</div>'}</div>`;
+    return;
+  }
+
+  if(phase==='active'){
+    const dayNum = daysUntil(today, info.startDate) + 1;
+    const totalDays = daysBetween(info.startDate, info.endDate);
+    const todayAgenda = dayAgenda(d, today);
+    const tomorrow = addDaysISO(today, 1);
+    const tomorrowAgenda = tomorrow<=info.endDate ? dayAgenda(d, tomorrow) : [];
+    const spentToday = d.expenses.flatMap(e=>expenseDayShares(e)).filter(s=>s.day===today).reduce((s,x)=>s+x.amount,0);
+    const totalSpent = d.expenses.reduce((s,e)=>s+Number(e.amount||0),0);
+    const totalBudget = Number(info.budgetTotal||0);
+    const remaining = totalBudget - totalSpent;
+    el.innerHTML=`
+      <div class="flex-head"><div><h2 class="section-title" style="margin-bottom:4px">Hoje · Dia ${dayNum} de ${totalDays}</h2><div style="color:var(--text-dim);font-size:13px">${fmtDateShort(today)} — o que precisas de saber hoje.</div></div><button class="btn btn-primary" onclick="openLocationModal('create')">+ Guardar local</button></div>
+      <div class="quick-grid" style="margin-top:20px">
+        <div class="quick-card"><div class="kicker">Compromissos hoje</div><div class="big">${todayAgenda.length}</div></div>
+        <div class="quick-card"><div class="kicker">Gasto hoje</div><div class="big">${fmtMoney(spentToday, info.currency)}</div></div>
+        <div class="quick-card"><div class="kicker">Falta tratar</div><div class="big">${urgent.length}</div></div>
+        <div class="quick-card"><div class="kicker">Orçamento restante</div><div class="big ${remaining<0?'over':''}" style="${remaining<0?'color:var(--coral)':''}">${totalBudget>0?fmtMoney(remaining, info.currency):'—'}</div></div>
+      </div>
+      <div class="chart-row">
+        <div class="list-card"><div class="flex-head"><h3 class="section-title">Agenda de hoje</h3><button class="btn btn-sm" onclick="state.activeTab='roteiro';renderTabs();renderCurrentTab()">Ver roteiro</button></div>${todayAgenda.length?todayAgenda.map(renderAgendaRow).join(''):'<div class="check-meta">Nada marcado para hoje — dia livre.</div>'}</div>
+        <div class="list-card"><div class="flex-head"><h3 class="section-title">Falta tratar</h3><button class="btn btn-sm" onclick="openTaskModal()">+ Tarefa</button></div>${renderTaskRows(urgent)}</div>
+      </div>
+      <div class="list-card" style="margin-top:18px"><div class="flex-head"><h3 class="section-title">Amanhã</h3></div>${tomorrowAgenda.length?tomorrowAgenda.map(renderAgendaRow).join(''):'<div class="check-meta">Nada marcado para amanhã ainda.</div>'}</div>
+      <div class="list-card" style="margin-top:18px"><div class="flex-head"><h3 class="section-title">Ideias e locais por visitar</h3><button class="btn btn-sm" onclick="state.activeTab='roteiro';renderTabs();renderCurrentTab()">Ver todos</button></div>${ideas.length?ideas.map(renderInterestRow).join(''):'<div class="check-meta">Adiciona locais sem data para teres uma lista flexível de ideias.</div>'}</div>`;
+    return;
+  }
+
+  if(phase==='past'){
+    const totalSpent = d.expenses.reduce((s,e)=>s+Number(e.amount||0),0);
+    const totalBudget = Number(info.budgetTotal||0);
+    const totalDays = daysBetween(info.startDate, info.endDate);
+    el.innerHTML=`
+      <div class="flex-head"><div><h2 class="section-title" style="margin-bottom:4px">Hoje</h2><div style="color:var(--text-dim);font-size:13px">A viagem já terminou. Aqui fica o resumo.</div></div></div>
+      <div class="hero-progress" style="padding:16px 22px; margin-top:20px;">
+        <div class="desc" style="min-width:0;">
+          <h3 style="font-size:17px;">✅ "${escapeHtml(info.destination||info.name||'A viagem')}" — ${totalDays} dia(s)</h3>
+          <p>Gastaste ${fmtMoney(totalSpent, info.currency)}${totalBudget>0?` de um orçamento de ${fmtMoney(totalBudget, info.currency)}.`:'.'}</p>
+        </div>
+      </div>
+      <div class="chart-row" style="margin-top:18px">
+        <div class="list-card"><div class="flex-head"><h3 class="section-title">Ver resumo completo</h3><button class="btn btn-sm" onclick="state.activeTab='painel';renderTabs();renderCurrentTab()">Abrir Resumo</button></div><div class="check-meta">Gráficos por categoria e por dia, tudo o que gastaste na viagem.</div></div>
+        <div class="list-card"><div class="flex-head"><h3 class="section-title">Falta tratar</h3></div>${renderTaskRows(urgent)}</div>
+      </div>`;
+    return;
+  }
+
+  const datedBookings=d.bookings.filter(b=>b.dateFrom===today || b.dateTo===today).sort((a,b)=>bookingSortKey(a).localeCompare(bookingSortKey(b)));
   const fund=(d.advances||[]).reduce((sum,a)=>sum+advanceRemaining(a.id),0);
   el.innerHTML=`
     <div class="flex-head"><div><h2 class="section-title" style="margin-bottom:4px">Hoje</h2><div style="color:var(--text-dim);font-size:13px">Só mostramos o que tem hora, data ou precisa da tua atenção. O resto continua livre para improvisar.</div></div><button class="btn btn-primary" onclick="openLocationModal('create')">+ Guardar local</button></div>
@@ -1098,7 +1206,7 @@ function renderToday(el){
       <div class="quick-card"><div class="kicker">Fundo disponível</div><div class="big">${fmtMoney(fund,d.info.currency)}</div></div>
     </div>
     <div class="chart-row">
-      <div class="list-card"><div class="flex-head"><h3 class="section-title">Transportes e reservas</h3><button class="btn btn-sm" onclick="state.activeTab='reservas';renderTabs();renderCurrentTab()">Ver carteira</button></div>${datedBookings.length?datedBookings.map(b=>`<div class="check-row"><div style="font-size:20px">${(BOOKING_CATEGORIES.find(c=>c.key===b.category)||BOOKING_CATEGORIES[4]).icon}</div><div class="check-main"><div class="check-title">${b.timeFrom?escapeHtml(b.timeFrom)+' · ':''}${escapeHtml(b.provider||'Reserva')}${b.flightNumber?' · '+escapeHtml(b.flightNumber):''}</div><div class="check-meta">${bookingLocationText(b)?escapeHtml(bookingLocationText(b))+' · ':''}${b.code?`Código: <strong>${escapeHtml(b.code)}</strong>`:''} ${b.notes?`· ${escapeHtml(b.notes)}`:''}</div></div></div>`).join(''):'<div class="check-meta">Nenhum transporte ou reserva marcado para hoje.</div>'}</div>
+      <div class="list-card"><div class="flex-head"><h3 class="section-title">Transportes e reservas</h3><button class="btn btn-sm" onclick="state.activeTab='reservas';renderTabs();renderCurrentTab()">Ver carteira</button></div>${datedBookings.length?datedBookings.map(b=>renderAgendaRow({kind:'booking',data:b})).join(''):'<div class="check-meta">Nenhum transporte ou reserva marcado para hoje.</div>'}</div>
       <div class="list-card"><div class="flex-head"><h3 class="section-title">Falta tratar</h3><button class="btn btn-sm" onclick="openTaskModal()">+ Tarefa</button></div>${renderTaskRows(urgent)}</div>
     </div>
     <div class="list-card" style="margin-top:18px"><div class="flex-head"><h3 class="section-title">Ideias e locais por visitar</h3><button class="btn btn-sm" onclick="state.activeTab='roteiro';renderTabs();renderCurrentTab()">Ver todos</button></div>${ideas.length?ideas.map(renderInterestRow).join(''):'<div class="check-meta">Adiciona locais sem data para teres uma lista flexível de ideias.</div>'}</div>`;
