@@ -168,7 +168,8 @@ svg.world-bg path{fill:rgba(124,151,184,0.30); stroke:rgba(237,230,211,0.28); st
 svg.world-bg path:hover{fill:rgba(201,162,77,0.35);}
 .map-credit{font-size:10.5px; color:var(--text-dim); opacity:.7; margin-top:4px;}
 .map-pin{
-  position:absolute; transform:translate(-50%,-100%); display:flex; flex-direction:column; align-items:center;
+  position:absolute; transform:translate(-50%,-100%) scale(calc(1/var(--zoom,1))); transform-origin:50% 100%;
+  display:flex; flex-direction:column; align-items:center;
   cursor:pointer; z-index:2;
 }
 .map-pin .dot{
@@ -182,7 +183,8 @@ svg.world-bg path:hover{fill:rgba(201,162,77,0.35);}
   color:var(--text-dim); font-size:13.5px; padding:30px; pointer-events:none;
 }
 .map-popover{
-  position:absolute; transform:translate(-50%,calc(-100% - 32px)); background:var(--panel); border:1px solid var(--border);
+  position:absolute; margin-top:-32px; transform:translate(-50%,-100%) scale(calc(1/var(--zoom,1))); transform-origin:50% 100%;
+  background:var(--panel); border:1px solid var(--border);
   border-radius:9px; padding:12px 14px; width:200px; z-index:5; box-shadow:0 8px 24px rgba(0,0,0,.4);
 }
 .map-popover h5{margin:0 0 4px; font-family:var(--font-display); font-size:15px;}
@@ -1208,6 +1210,15 @@ function bookingLocationText(b){
   return [a?.name,z?.name].filter(Boolean).join(' → ');
 }
 function isBookingLocation(l){ return !!l.fromBooking || l.notes==='Local associado a uma reserva'; }
+function locationChronoKey(loc){
+  if(loc.day) return `${loc.day}T${loc.time||'12:00'}`;
+  const related = (state.currentData.bookings||[]).filter(b=>b.locationId===loc.id || b.arrivalLocationId===loc.id);
+  if(related.length){
+    const keys = related.map(b=> b.arrivalLocationId===loc.id ? `${b.dateFrom||'9999-12-31'}T${b.timeTo||b.timeFrom||'23:59'}` : bookingSortKey(b));
+    return keys.sort()[0];
+  }
+  return '9999-12-31T23:59';
+}
 function renderRoteiro(el){
   const locs = state.currentData.locations.filter(l=>!isBookingLocation(l));
   const bookings=[...(state.currentData.bookings||[])];
@@ -1257,7 +1268,10 @@ function renderLocItem(loc){
 function renderMapCanvas(){
   const wrap = document.getElementById('mapCanvas');
   if(!wrap) return;
-  const locs = [...state.currentData.locations].filter(l=>l.x!=null && l.y!=null).sort((a,b)=>(a.order||0)-(b.order||0));
+  const locs = [...state.currentData.locations].filter(l=>l.x!=null && l.y!=null).sort((a,b)=>{
+    const ka = locationChronoKey(a), kb = locationChronoKey(b);
+    return ka!==kb ? ka.localeCompare(kb) : (a.order||0)-(b.order||0);
+  });
   let inner = worldMapBgSvg();
   if(!locs.length){
     inner += `<div class="map-empty-hint">O mapa fica aqui — adiciona uma paragem e posiciona-a no mapa para veres o percurso.</div>`;
@@ -1304,6 +1318,7 @@ function applyMapTransform(){
   if(!inner) return;
   const mv = state.mapView;
   inner.style.transform = `translate(${mv.tx}px, ${mv.ty}px) scale(${mv.zoom})`;
+  inner.style.setProperty('--zoom', mv.zoom);
 }
 const MAP_MIN_ZOOM = 1, MAP_MAX_ZOOM = 6;
 function mapZoomBy(factor, screenX, screenY){
