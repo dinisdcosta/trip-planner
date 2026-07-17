@@ -354,6 +354,7 @@ const BOOKING_CATEGORIES = [
 
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
 function catInfo(key){ return CATEGORIES.find(c=>c.key===key) || CATEGORIES[CATEGORIES.length-1]; }
+function cssVar(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 function fmtMoney(amount, currency){
   try{ return new Intl.NumberFormat('pt-PT', {style:'currency', currency: currency || 'EUR'}).format(amount||0); }
   catch(e){ return (amount||0).toFixed(2) + ' ' + (currency||'EUR'); }
@@ -980,6 +981,7 @@ function toggleTheme(){
   document.documentElement.dataset.theme = document.documentElement.dataset.theme==='light' ? 'dark' : 'light';
   localStorage.setItem('travel-theme', document.documentElement.dataset.theme);
   updateThemeButton();
+  if(state.currentData) renderCurrentTab();
 }
 function updateThemeButton(){
   const b=document.getElementById('themeBtn'); if(!b) return;
@@ -1169,20 +1171,43 @@ function renderCategoryChart(expenses, currency, canvasId='catChart', slot='cat'
   }
   state.charts[slot] = new Chart(ctx, {
     type:'doughnut',
-    data:{ labels: CATEGORIES.map(c=>c.label), datasets:[{ data: totals, backgroundColor: CATEGORIES.map(c=>c.color), borderColor:'#152437', borderWidth:2 }]},
+    data:{ labels: CATEGORIES.map(c=>c.label), datasets:[{ data: totals, backgroundColor: CATEGORIES.map(c=>c.color), borderColor: cssVar('--panel-alt'), borderWidth:2 }]},
     options:{
-      plugins:{ legend:{ position:'bottom', labels:{ color:'#EDE6D3', font:{family:"'IBM Plex Sans'", size:11}, boxWidth:10, padding:12 } },
+      plugins:{ legend:{ position:'bottom', labels:{ color:cssVar('--text'), font:{family:"'IBM Plex Sans'", size:11}, boxWidth:10, padding:12 } },
         tooltip:{ callbacks:{ label:(c)=> ` ${c.label}: ${fmtMoney(c.raw, currency)}` } } },
       cutout:'62%'
     }
   });
 }
 
+function addDaysISO(dateStr, n){
+  const [y,m,d] = dateStr.split('-').map(Number);
+  const dt = new Date(y, m-1, d+n);
+  return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
+}
+function expenseDayShares(e){
+  // Uma despesa ligada a uma reserva conta para o(s) dia(s) da reserva (ex: estadia),
+  // não para a data em que foi paga — pagar hoje por um voo daqui a 15 dias deve aparecer
+  // no dia do voo, não em "hoje". A data da despesa continua a ser só o registo do pagamento.
+  const amount = Number(e.amount||0);
+  const booking = e.bookingId ? (state.currentData.bookings||[]).find(b=>b.id===e.bookingId) : null;
+  if(booking && booking.dateFrom){
+    const from = booking.dateFrom;
+    const to = (booking.dateTo && booking.dateTo>=from) ? booking.dateTo : from;
+    const days = [];
+    let cur = from;
+    while(cur<=to && days.length<60){ days.push(cur); cur = addDaysISO(cur,1); }
+    if(!days.length) days.push(from);
+    const share = amount/days.length;
+    return days.map(day=>({day, amount:share}));
+  }
+  return [{day: e.date || 'sem data', amount}];
+}
 function renderDayChart(expenses, currency){
   const ctx = document.getElementById('dayChart');
   if(!ctx) return;
   const byDay = {};
-  expenses.forEach(e=>{ const d = e.date || 'sem data'; byDay[d] = (byDay[d]||0) + Number(e.amount||0); });
+  expenses.forEach(e=>{ expenseDayShares(e).forEach(({day,amount})=>{ byDay[day] = (byDay[day]||0) + amount; }); });
   const labels = Object.keys(byDay).sort();
   if(state.charts.day) state.charts.day.destroy();
   if(!labels.length){
@@ -1195,8 +1220,8 @@ function renderDayChart(expenses, currency){
     options:{
       plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label:(c)=> fmtMoney(c.raw, currency) } } },
       scales:{
-        x:{ ticks:{ color:'#93A5BB', font:{family:"'IBM Plex Mono'", size:10.5} }, grid:{display:false} },
-        y:{ ticks:{ color:'#93A5BB', font:{family:"'IBM Plex Mono'", size:10.5} }, grid:{color:'rgba(237,230,211,0.08)'} }
+        x:{ ticks:{ color:cssVar('--text-dim'), font:{family:"'IBM Plex Mono'", size:10.5} }, grid:{display:false} },
+        y:{ ticks:{ color:cssVar('--text-dim'), font:{family:"'IBM Plex Mono'", size:10.5} }, grid:{color:cssVar('--border')} }
       }
     }
   });
