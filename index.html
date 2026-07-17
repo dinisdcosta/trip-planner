@@ -338,6 +338,7 @@ svg.world-bg path:hover{fill:rgba(201,162,77,0.35);}
 const CATEGORIES = [
   {key:'alojamento', label:'Alojamento', icon:'🛏️', color:'#7C97B8'},
   {key:'alimentacao', label:'Alimentação', icon:'🍽️', color:'#C9A24D'},
+  {key:'voos', label:'Voos', icon:'✈️', color:'#6C6FD1'},
   {key:'transporte', label:'Transporte', icon:'🚗', color:'#4FA39A'},
   {key:'atividades', label:'Atividades', icon:'🎟️', color:'#A9829F'},
   {key:'compras', label:'Compras', icon:'🛍️', color:'#86AE8C'},
@@ -351,6 +352,7 @@ const BOOKING_CATEGORIES = [
   {key:'atividade', label:'Atividade', icon:'🎫'},
   {key:'outro', label:'Outro', icon:'📄'},
 ];
+const BOOKING_TO_EXPENSE_CATEGORY = {voo:'voos', alojamento:'alojamento', transporte:'transporte', atividade:'atividades', outro:'outros'};
 
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
 function catInfo(key){ return CATEGORIES.find(c=>c.key===key) || CATEGORIES[CATEGORIES.length-1]; }
@@ -2195,6 +2197,12 @@ function openExpenseModal(mode, id){
       <button class="btn btn-primary" id="saveExpBtn">${editing?'Guardar':'Adicionar'}</button>
     </div>
   `);
+  document.getElementById('e_booking').addEventListener('change', (e)=>{
+    const booking = bookings.find(b=>b.id===e.target.value);
+    if(!booking) return;
+    const suggested = BOOKING_TO_EXPENSE_CATEGORY[booking.category];
+    if(suggested) document.getElementById('e_cat').value = suggested;
+  });
   document.getElementById('saveExpBtn').addEventListener('click', ()=>{
     const amount = Number(document.getElementById('e_amount').value);
     if(!amount || amount<=0){ alert('Indica um valor válido.'); return; }
