@@ -151,7 +151,7 @@ select:focus, input:focus, textarea:focus{outline:2px solid var(--gold); outline
 
 .map-canvas{
   position:relative; width:100%; aspect-ratio:784/510; border-radius:12px; overflow:hidden;
-  border:1px solid var(--border);
+  border:1px solid var(--border); cursor:grab; touch-action:none;
   background:
     radial-gradient(circle at 20% 25%, rgba(79,163,154,0.10), transparent 40%),
     radial-gradient(circle at 75% 15%, rgba(201,162,77,0.09), transparent 38%),
@@ -159,6 +159,9 @@ select:focus, input:focus, textarea:focus{outline:2px solid var(--gold); outline
     var(--bg-alt);
 }
 .map-canvas.placing{cursor:crosshair;}
+.map-canvas.dragging{cursor:grabbing;}
+.map-inner{position:absolute; inset:0; width:100%; height:100%; transform-origin:0 0;}
+.map-canvas.animating .map-inner{transition:transform .35s ease;}
 .map-canvas svg.routes{position:absolute; inset:0; width:100%; height:100%; pointer-events:none; z-index:1;}
 svg.world-bg{position:absolute; inset:0; width:100%; height:100%; z-index:0;}
 svg.world-bg path{fill:rgba(124,151,184,0.30); stroke:rgba(237,230,211,0.28); stroke-width:0.6; transition:fill .2s ease;}
@@ -187,6 +190,13 @@ svg.world-bg path:hover{fill:rgba(201,162,77,0.35);}
 .map-popover .spend{font-family:var(--font-mono); font-size:13px; color:var(--teal);}
 .map-popover .notes{font-size:12.5px; color:var(--text-dim); margin-top:6px; line-height:1.5;}
 .map-legend{margin-top:12px; font-size:12px; color:var(--text-dim); display:flex; align-items:center; gap:8px;}
+.map-zoom-controls{position:absolute; right:10px; bottom:10px; z-index:6; display:flex; flex-direction:column; gap:6px;}
+.map-zoom-btn{
+  width:30px; height:30px; border-radius:8px; border:1px solid var(--border); background:var(--panel);
+  color:var(--text); font-size:16px; line-height:1; cursor:pointer; display:flex; align-items:center; justify-content:center;
+  box-shadow:0 2px 6px rgba(0,0,0,.25); font-family:var(--font-mono);
+}
+.map-zoom-btn:hover{border-color:var(--gold); color:var(--gold);}
 
 /* ---------- Despesas (ticket rows) ---------- */
 .expense-toolbar{display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:16px; flex-wrap:wrap;}
@@ -660,7 +670,10 @@ function ensureShape(data){
   if(!data.modules) data.modules = {today:true,locations:true,bookings:true,preparation:true,expenses:true,budget:true,dashboard:true};
   if(!data.tombstones) data.tombstones = {};
   TOMBSTONE_KEYS.forEach(k=>{ if(!Array.isArray(data.tombstones[k])) data.tombstones[k] = []; });
-  data.locations.forEach(l=>{ if(l.visited==null) l.visited=false; });
+  data.locations.forEach(l=>{
+    if(l.visited==null) l.visited=false;
+    if(l.lat!=null && l.lon!=null){ const xy=mapXYFromCoords(l.lat,l.lon); l.x=xy.x; l.y=xy.y; }
+  });
   data.expenses.forEach(e=>{
     if(!Array.isArray(e.fundAllocations)){
       e.fundAllocations = e.advanceId ? [{advanceId:e.advanceId, amount:Number(e.amount||0)}] : [];
@@ -686,6 +699,7 @@ const state = {
   activeTab: 'hoje',
   charts: {},
   mapPopoverId: null,
+  mapView: {zoom:1, tx:0, ty:0, fitKey:null},
   modalPendingXY: null,
   deletedTripIds: [],
   sync: { owner:'', repo:'', path:'travel-data.json', branch:'main', token:'', enabled:false, sha:null, lastSyncedAt:null, statusMsg:'' },
@@ -1207,8 +1221,14 @@ function renderRoteiro(el){
     <div class="flex-head"><div><h2 class="section-title" style="margin-bottom:4px">Roteiro &amp; percurso</h2><div class="check-meta">Reservas, transportes, alojamentos e locais aparecem juntos por data e hora. A hora é sempre opcional.</div></div><div style="display:flex;gap:8px"><button class="btn btn-sm" onclick="openBookingModal('create')">+ Reserva</button><button class="btn btn-sm btn-primary" onclick="openLocationModal('create')">+ Local</button></div></div>
     <div class="itin-layout" style="margin-top:18px"><div><div id="itinList">
       ${dayKeys.length?dayKeys.map(day=>`<div class="day-group"><div class="day-label">${day==='Sem data'?'Sem data':new Date(day+'T00:00:00').toLocaleDateString('pt-PT',{weekday:'long',day:'2-digit',month:'short'})}</div>${grouped[day].map(e=>e.kind==='booking'?renderBookingTimelineItem(e.data):renderLocItem(e.data)).join('')}</div>`).join(''):'<p style="color:var(--text-dim);font-size:14px">Ainda não existem elementos no roteiro.</p>'}
-    </div></div><div><div id="mapCanvas" class="map-canvas"></div><div class="map-legend">📍 O mapa inclui locais de interesse e locais associados às reservas.</div><div class="map-credit">Mapa base: Wikimedia Commons, CC BY-SA 3.0</div></div></div>`;
+    </div></div><div><div id="mapCanvas" class="map-canvas"></div><div class="map-legend">📍 O mapa inclui locais de interesse e locais associados às reservas. Roda a roda do rato ou belisca para dar zoom, arrasta para mover.</div><div class="map-credit">Mapa base: Wikimedia Commons, CC BY-SA 3.0</div></div></div>`;
   renderMapCanvas();
+  const pinned = state.currentData.locations.filter(l=>l.x!=null && l.y!=null);
+  const fitKey = pinned.map(l=>`${l.id}:${l.x}:${l.y}`).sort().join('|');
+  if(state.mapView.fitKey !== fitKey){
+    state.mapView.fitKey = fitKey;
+    fitMapToLocations();
+  }
 }
 function renderBookingTimelineItem(b){
   const c=BOOKING_CATEGORIES.find(x=>x.key===b.category)||BOOKING_CATEGORIES[4];
@@ -1238,45 +1258,163 @@ function renderMapCanvas(){
   const wrap = document.getElementById('mapCanvas');
   if(!wrap) return;
   const locs = [...state.currentData.locations].filter(l=>l.x!=null && l.y!=null).sort((a,b)=>(a.order||0)-(b.order||0));
-  let html = worldMapBgSvg();
+  let inner = worldMapBgSvg();
   if(!locs.length){
-    html += `<div class="map-empty-hint">O mapa fica aqui — adiciona uma paragem e posiciona-a no mapa para veres o percurso.</div>`;
+    inner += `<div class="map-empty-hint">O mapa fica aqui — adiciona uma paragem e posiciona-a no mapa para veres o percurso.</div>`;
   }
   // route lines
   if(locs.length>1){
     let path = locs.map(l=>`${l.x},${l.y}`).join(' ');
-    html += `<svg class="routes" viewBox="0 0 100 100" preserveAspectRatio="none"><polyline points="${path}" fill="none" stroke="#C9A24D" stroke-width="0.6" stroke-dasharray="2,2" opacity="0.7" vector-effect="non-scaling-stroke"/></svg>`;
+    inner += `<svg class="routes" viewBox="0 0 100 100" preserveAspectRatio="none"><polyline points="${path}" fill="none" stroke="#C9A24D" stroke-width="0.6" stroke-dasharray="2,2" opacity="0.7" vector-effect="non-scaling-stroke"/></svg>`;
   }
   locs.forEach((loc, i)=>{
-    html += `<div class="map-pin" style="left:${loc.x}%; top:${loc.y}%;" onclick="event.stopPropagation(); toggleMapPopover('${loc.id}')">
+    inner += `<div class="map-pin" style="left:${loc.x}%; top:${loc.y}%;" onclick="event.stopPropagation(); toggleMapPopover('${loc.id}')">
       <div class="dot"><span>${i+1}</span></div>
     </div>`;
   });
-  wrap.innerHTML = html;
-
   if(state.mapPopoverId){
     const loc = state.currentData.locations.find(l=>l.id===state.mapPopoverId);
     if(loc && loc.x!=null){
       const spend = state.currentData.expenses.filter(e=>e.locationId===loc.id).reduce((s,e)=>s+Number(e.amount||0),0);
-      const pop = document.createElement('div');
-      pop.className = 'map-popover';
-      pop.style.left = loc.x+'%';
-      pop.style.top = loc.y+'%';
-      pop.innerHTML = `
+      inner += `<div class="map-popover" style="left:${loc.x}%; top:${loc.y}%;">
         <div class="day">${loc.day ? fmtDateShort(loc.day) : 'Sem data'}${loc.time ? ' · '+loc.time : ''}</div>
         <h5>${escapeHtml(loc.name)}</h5>
         ${spend>0 ? `<div class="spend">${fmtMoney(spend, state.currentData.info.currency)}</div>` : `<div class="spend" style="color:var(--text-dim)">Sem gastos associados</div>`}
         ${loc.notes ? `<div class="notes">${escapeHtml(loc.notes)}</div>` : ''}
-      `;
-      wrap.appendChild(pop);
+      </div>`;
     }
   }
-  wrap.onclick = ()=>{ if(state.mapPopoverId){ state.mapPopoverId=null; renderMapCanvas(); } };
+  wrap.innerHTML = `<div class="map-inner" id="mapInner">${inner}</div>
+    <div class="map-zoom-controls">
+      <button type="button" class="map-zoom-btn" title="Aproximar" onclick="event.stopPropagation();mapZoomBy(1.4)">+</button>
+      <button type="button" class="map-zoom-btn" title="Afastar" onclick="event.stopPropagation();mapZoomBy(1/1.4)">−</button>
+      <button type="button" class="map-zoom-btn" title="Ajustar aos locais" onclick="event.stopPropagation();fitMapToLocations()">⤢</button>
+    </div>`;
+  wrap.onclick = ()=>{ if(state.mapView.suppressClick) return; if(state.mapPopoverId){ state.mapPopoverId=null; renderMapCanvas(); } };
+  applyMapTransform();
+  bindMapInteractions(wrap);
 }
 function toggleMapPopover(id){
+  if(state.mapView.suppressClick) return;
   state.mapPopoverId = state.mapPopoverId === id ? null : id;
   renderMapCanvas();
 }
+function applyMapTransform(){
+  const inner = document.getElementById('mapInner');
+  if(!inner) return;
+  const mv = state.mapView;
+  inner.style.transform = `translate(${mv.tx}px, ${mv.ty}px) scale(${mv.zoom})`;
+}
+const MAP_MIN_ZOOM = 1, MAP_MAX_ZOOM = 6;
+function mapZoomBy(factor, screenX, screenY){
+  const wrap = document.getElementById('mapCanvas');
+  if(!wrap) return;
+  if(screenX==null || screenY==null){
+    screenX = wrap.clientWidth/2; screenY = wrap.clientHeight/2;
+  }
+  const mv = state.mapView;
+  const newZoom = Math.max(MAP_MIN_ZOOM, Math.min(MAP_MAX_ZOOM, mv.zoom*factor));
+  const actualFactor = newZoom/mv.zoom;
+  mv.tx = screenX - actualFactor*(screenX-mv.tx);
+  mv.ty = screenY - actualFactor*(screenY-mv.ty);
+  mv.zoom = newZoom;
+  applyMapTransform();
+}
+function fitMapToLocations(){
+  const wrap = document.getElementById('mapCanvas');
+  if(!wrap || !state.currentData) return;
+  const locs = state.currentData.locations.filter(l=>l.x!=null && l.y!=null);
+  const w = wrap.clientWidth || 1, h = wrap.clientHeight || 1;
+  const mv = state.mapView;
+  wrap.classList.add('animating');
+  clearTimeout(wrap._animTimer);
+  wrap._animTimer = setTimeout(()=>wrap.classList.remove('animating'), 400);
+  if(!locs.length){
+    mv.zoom=1; mv.tx=0; mv.ty=0;
+    applyMapTransform();
+    return;
+  }
+  if(locs.length===1){
+    const px = w*locs[0].x/100, py = h*locs[0].y/100;
+    mv.zoom = 3;
+    mv.tx = w/2 - mv.zoom*px;
+    mv.ty = h/2 - mv.zoom*py;
+    applyMapTransform();
+    return;
+  }
+  const padPct = 8;
+  let minX=100,maxX=0,minY=100,maxY=0;
+  locs.forEach(l=>{ minX=Math.min(minX,l.x); maxX=Math.max(maxX,l.x); minY=Math.min(minY,l.y); maxY=Math.max(maxY,l.y); });
+  minX=Math.max(0,minX-padPct); maxX=Math.min(100,maxX+padPct);
+  minY=Math.max(0,minY-padPct); maxY=Math.min(100,maxY+padPct);
+  const minXpx=w*minX/100, maxXpx=w*maxX/100, minYpx=h*minY/100, maxYpx=h*maxY/100;
+  const margin = 26;
+  const spanX = Math.max(1, maxXpx-minXpx), spanY = Math.max(1, maxYpx-minYpx);
+  let zoom = Math.min((w-2*margin)/spanX, (h-2*margin)/spanY);
+  zoom = Math.max(MAP_MIN_ZOOM, Math.min(MAP_MAX_ZOOM, zoom));
+  const tx = margin - zoom*minXpx + Math.max(0,((w-2*margin)-zoom*spanX))/2;
+  const ty = margin - zoom*minYpx + Math.max(0,((h-2*margin)-zoom*spanY))/2;
+  mv.zoom = zoom; mv.tx = tx; mv.ty = ty;
+  applyMapTransform();
+}
+function bindMapInteractions(wrap){
+  const pointers = new Map();
+  let dragging = false, lastX=0, lastY=0, moved=0, pinchDist=0;
+  wrap.onpointerdown = (e)=>{
+    if(e.target.closest('.map-zoom-btn')) return;
+    wrap.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId, {x:e.clientX, y:e.clientY});
+    moved = 0;
+    if(pointers.size===1){ dragging=true; lastX=e.clientX; lastY=e.clientY; wrap.classList.add('dragging'); }
+    else if(pointers.size===2){
+      dragging=false;
+      const pts=[...pointers.values()];
+      pinchDist = Math.hypot(pts[0].x-pts[1].x, pts[0].y-pts[1].y) || 1;
+    }
+  };
+  wrap.onpointermove = (e)=>{
+    if(!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, {x:e.clientX, y:e.clientY});
+    if(pointers.size===1 && dragging){
+      const dx=e.clientX-lastX, dy=e.clientY-lastY;
+      lastX=e.clientX; lastY=e.clientY;
+      moved += Math.abs(dx)+Math.abs(dy);
+      state.mapView.tx += dx; state.mapView.ty += dy;
+      applyMapTransform();
+    } else if(pointers.size===2){
+      const pts=[...pointers.values()];
+      const dist = Math.hypot(pts[0].x-pts[1].x, pts[0].y-pts[1].y) || 1;
+      const rect = wrap.getBoundingClientRect();
+      const midX=(pts[0].x+pts[1].x)/2-rect.left, midY=(pts[0].y+pts[1].y)/2-rect.top;
+      mapZoomBy(dist/pinchDist, midX, midY);
+      pinchDist = dist;
+      moved += 5;
+    }
+  };
+  function endPointer(e){
+    pointers.delete(e.pointerId);
+    if(pointers.size===0){ dragging=false; wrap.classList.remove('dragging'); }
+    if(moved>6){
+      state.mapView.suppressClick = true;
+      setTimeout(()=>{ state.mapView.suppressClick = false; }, 0);
+    }
+  }
+  wrap.onpointerup = endPointer;
+  wrap.onpointercancel = endPointer;
+  wrap.onwheel = (e)=>{
+    e.preventDefault();
+    const rect = wrap.getBoundingClientRect();
+    const factor = e.deltaY < 0 ? 1.15 : 1/1.15;
+    mapZoomBy(factor, e.clientX-rect.left, e.clientY-rect.top);
+  };
+}
+let mapResizeTimer=null;
+window.addEventListener('resize', ()=>{
+  clearTimeout(mapResizeTimer);
+  mapResizeTimer = setTimeout(()=>{
+    if(state.activeTab==='roteiro' && document.getElementById('mapCanvas')) fitMapToLocations();
+  }, 200);
+});
 
 function deleteDayGroup(day){
   const label = day ? new Date(day+'T00:00:00').toLocaleDateString('pt-PT',{day:'2-digit', month:'short'}) : 'sem data';
@@ -1365,7 +1503,13 @@ function findOrCreateTypedLocation(name, note='Local associado a uma reserva'){
 }
 function mapXYFromCoords(lat, lon){
   lat = Number(lat); lon = Number(lon);
-  return {x: Math.max(2, Math.min(98, (lon+180)/360*100)), y: Math.max(4, Math.min(96, (90-lat)/180*100))};
+  // Calibrado por regressão contra as fronteiras reais de várias dezenas de países
+  // no mapa-base (que não é uma projeção equiretangular completa -90/90 — a imagem
+  // está cortada verticalmente, por isso a fórmula linear ingénua empurrava tudo
+  // para norte).
+  const x = 0.296438*lon + 47.781;
+  const y = -0.601964*lat + 63.226;
+  return {x: Math.max(2, Math.min(98, x)), y: Math.max(4, Math.min(96, y))};
 }
 function chooseBookingPlace(kind, r, q){
   const input=document.getElementById(kind==='arrival'?'b_arrival_location_text':'b_location_text');
