@@ -230,6 +230,9 @@ svg.world-bg path:hover{fill:rgba(201,162,77,0.35);}
 .bar-track{height:9px; border-radius:5px; background:#0B141F; overflow:hidden; border:1px solid var(--border);}
 .bar-fill{height:100%; border-radius:5px; transition:width .5s ease;}
 .cat-input{width:110px;}
+.color-swatch{width:26px; height:26px; border-radius:50%; border:2px solid transparent; cursor:pointer; padding:0;}
+.color-swatch.selected{border-color:var(--text); box-shadow:0 0 0 2px var(--panel-alt);}
+#cat_color_custom{width:34px; height:26px; padding:0; border:1px solid var(--border); border-radius:6px; background:none; cursor:pointer;}
 
 /* ---------- Modal ---------- */
 .modal-overlay{
@@ -335,7 +338,7 @@ svg.world-bg path:hover{fill:rgba(201,162,77,0.35);}
 
 <script>
 /* ============================= DATA LAYER ============================= */
-const CATEGORIES = [
+const DEFAULT_CATEGORIES = [
   {key:'alojamento', label:'Alojamento', icon:'🛏️', color:'#7C97B8'},
   {key:'alimentacao', label:'Alimentação', icon:'🍽️', color:'#C9A24D'},
   {key:'voos', label:'Voos', icon:'✈️', color:'#6C6FD1'},
@@ -344,6 +347,11 @@ const CATEGORIES = [
   {key:'compras', label:'Compras', icon:'🛍️', color:'#86AE8C'},
   {key:'outros', label:'Outros', icon:'📎', color:'#C1573E'},
 ];
+const CATEGORY_COLOR_CHOICES = ['#7C97B8','#C9A24D','#6C6FD1','#4FA39A','#A9829F','#86AE8C','#C1573E','#5C9DD9','#D98E5B','#8C6E9E'];
+function getCategories(){
+  const cats = state.currentData && state.currentData.budgetCategories;
+  return (Array.isArray(cats) && cats.length) ? cats : DEFAULT_CATEGORIES;
+}
 const CURRENCIES = ['EUR','USD','GBP','BRL'];
 const BOOKING_CATEGORIES = [
   {key:'voo', label:'Voo', icon:'✈️'},
@@ -355,7 +363,7 @@ const BOOKING_CATEGORIES = [
 const BOOKING_TO_EXPENSE_CATEGORY = {voo:'voos', alojamento:'alojamento', transporte:'transporte', atividade:'atividades', outro:'outros'};
 
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
-function catInfo(key){ return CATEGORIES.find(c=>c.key===key) || CATEGORIES[CATEGORIES.length-1]; }
+function catInfo(key){ const cats=getCategories(); return cats.find(c=>c.key===key) || cats[cats.length-1]; }
 function cssVar(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 function fmtMoney(amount, currency){
   try{ return new Intl.NumberFormat('pt-PT', {style:'currency', currency: currency || 'EUR'}).format(amount||0); }
@@ -658,7 +666,7 @@ function blankTripData(info){
     tasks: [],
     packingLists: [{id:uid(), name:'Mala principal', items:[]}],
     modules: {today:true,locations:true,bookings:true,preparation:true,expenses:true,budget:true,dashboard:true},
-    budgetCategories: CATEGORIES.map(c=>({key:c.key, planned:0})),
+    budgetCategories: DEFAULT_CATEGORIES.map(c=>({id:c.key, key:c.key, label:c.label, icon:c.icon, color:c.color, planned:0})),
     tombstones: {locations:[], expenses:[], bookings:[], advances:[], people:[], tasks:[]},
   };
 }
@@ -685,7 +693,19 @@ function ensureShape(data){
     }
     e.advanceId = null; // campo antigo mantido apenas para compatibilidade de importação
   });
-  if(!data.budgetCategories) data.budgetCategories = CATEGORIES.map(c=>({key:c.key, planned:0}));
+  if(!data.budgetCategories || !data.budgetCategories.length){
+    data.budgetCategories = DEFAULT_CATEGORIES.map(c=>({id:c.key, key:c.key, label:c.label, icon:c.icon, color:c.color, planned:0}));
+  } else {
+    // Migra entradas antigas (só {key,planned}) e garante um "id" estável para o merge de sincronização.
+    data.budgetCategories.forEach(c=>{
+      const def = DEFAULT_CATEGORIES.find(d=>d.key===c.key);
+      if(!c.id) c.id = c.key;
+      if(!c.label) c.label = def ? def.label : 'Categoria';
+      if(!c.icon) c.icon = def ? def.icon : '📌';
+      if(!c.color) c.color = def ? def.color : '#8C8C8C';
+      c.planned = Number(c.planned)||0;
+    });
+  }
   return data;
 }
 function markDeleted(type, id){
@@ -911,8 +931,20 @@ function normalizeImportedTrip(tripData){
     id: l.id || uid(), name: l.name||'', day: l.day||'', time: l.time||'', notes: l.notes||'',
     x: l.x!=null ? l.x : null, y: l.y!=null ? l.y : null, order: l.order!=null ? l.order : i,
   }));
+  tripData.budgetCategories = (tripData.budgetCategories && tripData.budgetCategories.length)
+    ? tripData.budgetCategories.map(c=>{
+        const def = DEFAULT_CATEGORIES.find(d=>d.key===c.key);
+        return {
+          id: c.id || c.key || uid(), key: c.key || uid(),
+          label: c.label || def?.label || 'Categoria', icon: c.icon || def?.icon || '📌', color: c.color || def?.color || '#8C8C8C',
+          planned: Number(c.planned)||0,
+        };
+      })
+    : DEFAULT_CATEGORIES.map(c=>({id:c.key, key:c.key, label:c.label, icon:c.icon, color:c.color, planned:0}));
+  const catKeys = new Set(tripData.budgetCategories.map(c=>c.key));
+  const fallbackCatKey = tripData.budgetCategories[0]?.key || 'outros';
   tripData.expenses = (tripData.expenses||[]).map(e=>({
-    id: e.id || uid(), date: e.date||'', categoryKey: CATEGORIES.some(c=>c.key===e.categoryKey) ? e.categoryKey : 'outros',
+    id: e.id || uid(), date: e.date||'', categoryKey: catKeys.has(e.categoryKey) ? e.categoryKey : fallbackCatKey,
     description: e.description||'', amount: Number(e.amount)||0, locationId: e.locationId||null, bookingId: e.bookingId||null,
     paidBy: e.paidBy||null, splitWith: Array.isArray(e.splitWith) ? e.splitWith : [],
   }));
@@ -924,11 +956,6 @@ function normalizeImportedTrip(tripData){
     departureTerminal:b.departureTerminal||'', arrivalTerminal:b.arrivalTerminal||'', lastFlightUpdate:b.lastFlightUpdate||'',
     notes: b.notes||'', link: b.link||'',
   }));
-  const catKeys = CATEGORIES.map(c=>c.key);
-  tripData.budgetCategories = catKeys.map(key=>{
-    const found = (tripData.budgetCategories||[]).find(b=>b.key===key);
-    return { key, planned: found ? Number(found.planned)||0 : 0 };
-  });
   // reconcile locationId/bookingId references that don't match any imported record
   const locIds = new Set(tripData.locations.map(l=>l.id));
   tripData.expenses.forEach(e=>{ if(e.locationId && !locIds.has(e.locationId)) e.locationId = null; });
@@ -1165,7 +1192,8 @@ function daysBetween(start, end){
 function renderCategoryChart(expenses, currency, canvasId='catChart', slot='cat'){
   const ctx = document.getElementById(canvasId);
   if(!ctx) return;
-  const totals = CATEGORIES.map(c => expenses.filter(e=>e.categoryKey===c.key).reduce((s,e)=>s+Number(e.amount||0),0));
+  const cats = getCategories();
+  const totals = cats.map(c => expenses.filter(e=>e.categoryKey===c.key).reduce((s,e)=>s+Number(e.amount||0),0));
   if(state.charts[slot]) state.charts[slot].destroy();
   if(totals.every(t=>t===0)){
     ctx.replaceWith(Object.assign(document.createElement('div'), {className:'map-empty-hint', style:'position:static;padding:40px 0;', textContent:'Ainda sem despesas registadas.'}));
@@ -1173,7 +1201,7 @@ function renderCategoryChart(expenses, currency, canvasId='catChart', slot='cat'
   }
   state.charts[slot] = new Chart(ctx, {
     type:'doughnut',
-    data:{ labels: CATEGORIES.map(c=>c.label), datasets:[{ data: totals, backgroundColor: CATEGORIES.map(c=>c.color), borderColor: cssVar('--panel-alt'), borderWidth:2 }]},
+    data:{ labels: cats.map(c=>c.label), datasets:[{ data: totals, backgroundColor: cats.map(c=>c.color), borderColor: cssVar('--panel-alt'), borderWidth:2 }]},
     options:{
       plugins:{ legend:{ position:'bottom', labels:{ color:cssVar('--text'), font:{family:"'IBM Plex Sans'", size:11}, boxWidth:10, padding:12 } },
         tooltip:{ callbacks:{ label:(c)=> ` ${c.label}: ${fmtMoney(c.raw, currency)}` } } },
@@ -1613,7 +1641,7 @@ function renderDespesas(el){
   const tripNotStarted = info.startDate && info.startDate > today;
   const daysToGo = tripNotStarted ? daysBetween(today, info.startDate) : null;
 
-  const catBreakdown = CATEGORIES.map(c=>({
+  const catBreakdown = getCategories().map(c=>({
     ...c, spent: allExpenses.filter(e=>e.categoryKey===c.key).reduce((s,e)=>s+Number(e.amount||0),0)
   })).filter(c=>c.spent>0).sort((a,b)=>b.spent-a.spent);
 
@@ -1656,7 +1684,7 @@ function renderDespesas(el){
         <label style="font-family:var(--font-mono); font-size:11px; color:var(--text-dim); text-transform:uppercase;">Categoria</label>
         <select id="filterSelect">
           <option value="todas">Todas</option>
-          ${CATEGORIES.map(c=>`<option value="${c.key}" ${filterKey===c.key?'selected':''}>${c.icon} ${c.label}</option>`).join('')}
+          ${getCategories().map(c=>`<option value="${c.key}" ${filterKey===c.key?'selected':''}>${c.icon} ${c.label}</option>`).join('')}
         </select>
       </div>
       <button class="btn btn-primary" onclick="openExpenseModal('create')">+ Adicionar despesa</button>
@@ -1923,18 +1951,24 @@ function renderOrcamento(el){
         : 'Orçamento livre é o que ainda não atribuíste a nenhuma categoria — dá para gastar onde precisares, sem categoria fixa.'}
     </p>` : ''}
 
+    <div class="flex-head" style="margin-bottom:10px;">
+      <h3 class="section-title" style="font-size:16px; margin:0;">Categorias</h3>
+      <button class="btn btn-sm" onclick="openCategoryModal('create')">+ Nova categoria</button>
+    </div>
     <div id="catBudgetRows">
-      ${CATEGORIES.map(c=>{
-        const catData = cats.find(x=>x.key===c.key) || {planned:0};
+      ${cats.map(c=>{
         const spent = expenses.filter(e=>e.categoryKey===c.key).reduce((s,e)=>s+Number(e.amount||0),0);
-        const planned = Number(catData.planned||0);
+        const planned = Number(c.planned||0);
         const pct = planned>0 ? Math.min(100, Math.round((spent/planned)*100)) : (spent>0?100:0);
         const over = planned>0 && spent>planned;
         return `
         <div class="cat-budget-row">
           <div class="cat-budget-head">
             <div class="name">${c.icon} ${c.label}</div>
-            <div class="nums">${fmtMoney(spent, info.currency)} / <input class="cat-input" data-cat="${c.key}" type="number" min="0" step="5" value="${planned}"> ${info.currency}</div>
+            <div class="nums">
+              ${fmtMoney(spent, info.currency)} / <input class="cat-input" data-cat="${c.key}" type="number" min="0" step="5" value="${planned}"> ${info.currency}
+              <button type="button" class="icon-btn" title="Editar categoria" onclick="openCategoryModal('edit','${c.key}')" style="margin-left:6px;">✎</button>
+            </div>
           </div>
           <div class="bar-track"><div class="bar-fill" style="width:${pct}%; background:${over?'var(--coral)':c.color};"></div></div>
         </div>`;
@@ -1956,13 +1990,82 @@ function renderOrcamento(el){
     document.querySelectorAll('.cat-input').forEach(inp=>{
       const key = inp.dataset.cat;
       const val = Number(inp.value)||0;
-      let entry = state.currentData.budgetCategories.find(c=>c.key===key);
-      if(!entry){ entry = {key, planned:0}; state.currentData.budgetCategories.push(entry); }
-      entry.planned = val;
+      const entry = state.currentData.budgetCategories.find(c=>c.key===key);
+      if(entry) entry.planned = val;
     });
     persistCurrentTrip();
     renderOrcamento(document.getElementById('panelContent'));
   });
+}
+
+function nextAvailableCategoryColor(){
+  const used = new Set(getCategories().map(c=>c.color));
+  return CATEGORY_COLOR_CHOICES.find(c=>!used.has(c)) || CATEGORY_COLOR_CHOICES[Math.floor(Math.random()*CATEGORY_COLOR_CHOICES.length)];
+}
+function openCategoryModal(mode, key){
+  const editing = mode==='edit';
+  const c = editing ? getCategories().find(x=>x.key===key) : {key:null, label:'', icon:'', color:nextAvailableCategoryColor()};
+  if(editing && !c) return;
+  let selectedColor = c.color;
+  openModal(`
+    <h3>${editing?'Editar categoria':'Nova categoria'}</h3>
+    <div class="field-row">
+      <div class="field" style="max-width:100px;"><label>Emoji</label><input id="cat_icon" maxlength="4" value="${escapeHtml(c.icon||'')}" placeholder="🎯" style="text-align:center; font-size:20px;"></div>
+      <div class="field"><label>Nome</label><input id="cat_label" value="${escapeHtml(c.label||'')}" placeholder="Ex: Seguro de viagem"></div>
+    </div>
+    <div class="field"><label>Cor</label>
+      <div id="colorSwatches" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+        ${CATEGORY_COLOR_CHOICES.map(col=>`<button type="button" class="color-swatch ${c.color===col?'selected':''}" data-color="${col}" style="background:${col}"></button>`).join('')}
+        <input type="color" id="cat_color_custom" value="${c.color}" title="Cor personalizada">
+      </div>
+    </div>
+    <div class="modal-actions">
+      ${editing?`<button class="btn btn-danger" style="margin-right:auto" onclick="deleteCategory('${c.key}')">Eliminar</button>`:''}
+      <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" id="saveCatBtn">${editing?'Guardar':'Adicionar'}</button>
+    </div>
+  `);
+  document.querySelectorAll('#colorSwatches .color-swatch').forEach(sw=>{
+    sw.onclick = ()=>{
+      selectedColor = sw.dataset.color;
+      document.querySelectorAll('#colorSwatches .color-swatch').forEach(s=>s.classList.remove('selected'));
+      sw.classList.add('selected');
+      document.getElementById('cat_color_custom').value = selectedColor;
+    };
+  });
+  document.getElementById('cat_color_custom').addEventListener('input', (e)=>{
+    selectedColor = e.target.value;
+    document.querySelectorAll('#colorSwatches .color-swatch').forEach(s=>s.classList.remove('selected'));
+  });
+  document.getElementById('saveCatBtn').addEventListener('click', ()=>{
+    const label = document.getElementById('cat_label').value.trim();
+    if(!label){ alert('Dá um nome à categoria.'); return; }
+    const icon = document.getElementById('cat_icon').value.trim() || '📌';
+    if(editing){
+      Object.assign(c, {label, icon, color:selectedColor});
+    } else {
+      const newKey = uid();
+      state.currentData.budgetCategories.push({id:newKey, key:newKey, label, icon, color:selectedColor, planned:0});
+    }
+    persistCurrentTrip();
+    closeModal();
+    renderOrcamento(document.getElementById('panelContent'));
+  });
+}
+function deleteCategory(key){
+  const cats = state.currentData.budgetCategories;
+  if(cats.length<=1){ alert('Tem de existir pelo menos uma categoria.'); return; }
+  const count = state.currentData.expenses.filter(e=>e.categoryKey===key).length;
+  const fallback = cats.find(c=>c.key!==key);
+  const msg = count>0
+    ? `${count} despesa(s) usam esta categoria. Vão passar para "${fallback.label}". Eliminar mesmo assim?`
+    : 'Eliminar esta categoria?';
+  if(!confirm(msg)) return;
+  state.currentData.budgetCategories = cats.filter(c=>c.key!==key);
+  state.currentData.expenses.forEach(e=>{ if(e.categoryKey===key) e.categoryKey = fallback.key; });
+  persistCurrentTrip();
+  closeModal();
+  renderOrcamento(document.getElementById('panelContent'));
 }
 
 /* ============================= PERSIST HELPERS ============================= */
@@ -2150,7 +2253,8 @@ function drawSelectedGeocodePin(){const mini=document.getElementById('miniMap');
 
 function openExpenseModal(mode, id){
   const editing = mode==='edit';
-  const exp = editing ? state.currentData.expenses.find(e=>e.id===id) : {date:'', categoryKey:CATEGORIES[0].key, description:'', amount:'', locationId:'', bookingId:'', paidBy:'', splitWith:[], fundAllocations:[]};
+  const cats = getCategories();
+  const exp = editing ? state.currentData.expenses.find(e=>e.id===id) : {date:'', categoryKey:cats[0].key, description:'', amount:'', locationId:'', bookingId:'', paidBy:'', splitWith:[], fundAllocations:[]};
   const locs = state.currentData.locations;
   const bookings = state.currentData.bookings||[];
   const people = state.currentData.people;
@@ -2162,7 +2266,7 @@ function openExpenseModal(mode, id){
         <label>Data (opcional)</label>
         <input type="date" id="e_date" value="${exp.date||''}">
       </div>
-      <div class="field"><label>Categoria</label><select id="e_cat">${CATEGORIES.map(c=>`<option value="${c.key}" ${exp.categoryKey===c.key?'selected':''}>${c.icon} ${c.label}</option>`).join('')}</select></div>
+      <div class="field"><label>Categoria</label><select id="e_cat">${cats.map(c=>`<option value="${c.key}" ${exp.categoryKey===c.key?'selected':''}>${c.icon} ${c.label}</option>`).join('')}</select></div>
     </div>
     <p style="font-size:12px; color:var(--text-dim); margin:-8px 0 14px; line-height:1.5;">Deixa em branco se a despesa não pertencer a um dia específico — por exemplo voos ou outras compras agregadas. Aparece como "sem data" nas estatísticas, mas continua a contar para o orçamento.</p>
     <div class="field"><label>Descrição</label><input id="e_desc" value="${escapeHtml(exp.description||'')}" placeholder="Ex: Jantar em Shibuya"></div>
