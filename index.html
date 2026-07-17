@@ -172,12 +172,31 @@ svg.world-bg path:hover{fill:rgba(201,162,77,0.35);}
   display:flex; flex-direction:column; align-items:center;
   cursor:pointer; z-index:2;
 }
+.map-pin:hover{ z-index:8; }
+.map-pin .pin-badge{ position:relative; width:26px; height:26px; }
 .map-pin .dot{
   width:26px; height:26px; border-radius:50% 50% 50% 0; background:var(--gold); border:2px solid var(--bg-alt);
   transform:rotate(-45deg); display:flex; align-items:center; justify-content:center; box-shadow:0 2px 6px rgba(0,0,0,.4);
+  transition:transform .12s ease, filter .12s ease;
 }
-.map-pin .dot span{transform:rotate(45deg); font-family:var(--font-mono); font-size:11px; font-weight:700; color:#20160A;}
-.map-pin:hover .dot{filter:brightness(1.15);}
+.map-pin .dot span{transform:rotate(45deg); font-family:var(--font-mono); font-size:13px; font-weight:700; color:#20160A; line-height:1;}
+.map-pin:hover .dot{filter:brightness(1.15); transform:rotate(-45deg) scale(1.08);}
+.map-pin .pin-num{
+  position:absolute; top:-5px; right:-5px; width:15px; height:15px; border-radius:50%;
+  background:var(--bg-alt); border:1.5px solid var(--panel-alt); color:var(--text-dim);
+  font-family:var(--font-mono); font-size:8.5px; font-weight:700; line-height:1;
+  display:flex; align-items:center; justify-content:center;
+}
+.pin-tip{
+  position:absolute; left:50%; bottom:calc(100% + 10px); transform:translateX(-50%);
+  background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:6px 10px;
+  white-space:nowrap; max-width:220px; box-shadow:0 6px 18px rgba(0,0,0,.3);
+  opacity:0; visibility:hidden; transition:opacity .12s ease; pointer-events:none; z-index:9;
+}
+.map-pin:hover .pin-tip{ opacity:1; visibility:visible; }
+.pin-tip .pin-tip-cat{font-family:var(--font-mono); font-size:9.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--gold); margin-bottom:2px;}
+.pin-tip .pin-tip-title{font-family:var(--font-display); font-size:13.5px; font-weight:600; color:var(--text); white-space:normal;}
+.pin-tip .pin-tip-meta{font-size:11px; color:var(--text-dim); margin-top:2px;}
 .map-empty-hint{
   position:absolute; inset:0; display:flex; align-items:center; justify-content:center; text-align:center;
   color:var(--text-dim); font-size:13.5px; padding:30px; pointer-events:none;
@@ -191,7 +210,10 @@ svg.world-bg path:hover{fill:rgba(201,162,77,0.35);}
 .map-popover .day{font-family:var(--font-mono); font-size:10.5px; color:var(--gold); text-transform:uppercase; margin-bottom:6px;}
 .map-popover .spend{font-family:var(--font-mono); font-size:13px; color:var(--teal);}
 .map-popover .notes{font-size:12.5px; color:var(--text-dim); margin-top:6px; line-height:1.5;}
-.map-legend{margin-top:12px; font-size:12px; color:var(--text-dim); display:flex; align-items:center; gap:8px;}
+.map-legend{margin-top:10px; font-size:12px; color:var(--text-dim); display:flex; align-items:center; gap:8px;}
+.map-legend-swatches{margin-top:12px; display:flex; flex-wrap:wrap; gap:10px 14px;}
+.map-legend-swatches span{display:inline-flex; align-items:center; gap:5px; font-size:11px; color:var(--text-dim);}
+.map-legend-swatches i{width:9px; height:9px; border-radius:50%; display:inline-block; flex-shrink:0;}
 .map-zoom-controls{position:absolute; right:10px; bottom:10px; z-index:6; display:flex; flex-direction:column; gap:6px;}
 .map-zoom-btn{
   width:30px; height:30px; border-radius:8px; border:1px solid var(--border); background:var(--panel);
@@ -1373,14 +1395,31 @@ function bookingLocationText(b){
   return [a?.name,z?.name].filter(Boolean).join(' → ');
 }
 function isBookingLocation(l){ return !!l.fromBooking || l.notes==='Local associado a uma reserva'; }
+function relatedBookingsForLocation(loc){
+  return (state.currentData.bookings||[]).filter(b=>b.locationId===loc.id || b.arrivalLocationId===loc.id);
+}
 function locationChronoKey(loc){
   if(loc.day) return `${loc.day}T${loc.time||'12:00'}`;
-  const related = (state.currentData.bookings||[]).filter(b=>b.locationId===loc.id || b.arrivalLocationId===loc.id);
+  const related = relatedBookingsForLocation(loc);
   if(related.length){
     const keys = related.map(b=> b.arrivalLocationId===loc.id ? `${b.dateFrom||'9999-12-31'}T${b.timeTo||b.timeFrom||'23:59'}` : bookingSortKey(b));
     return keys.sort()[0];
   }
   return '9999-12-31T23:59';
+}
+const BOOKING_PIN_COLORS = {voo:'#6C6FD1', alojamento:'#7C97B8', transporte:'#4FA39A', atividade:'#A9829F', outro:'#C1573E'};
+function mapLegendSwatches(){
+  const entries = [{color:'var(--gold)', label:'Local de interesse'}, ...BOOKING_CATEGORIES.map(c=>({color:BOOKING_PIN_COLORS[c.key], label:c.label}))];
+  return entries.map(e=>`<span><i style="background:${e.color}"></i>${escapeHtml(e.label)}</span>`).join('');
+}
+function locationPinVisual(loc){
+  if(loc.airportIata) return {icon:'✈️', color:BOOKING_PIN_COLORS.voo, label:'Aeroporto'};
+  const related = relatedBookingsForLocation(loc);
+  if(related.length){
+    const cat = BOOKING_CATEGORIES.find(c=>c.key===related[0].category);
+    if(cat) return {icon:cat.icon, color:BOOKING_PIN_COLORS[cat.key]||'var(--gold)', label:cat.label};
+  }
+  return {icon:'📍', color:'var(--gold)', label:'Local de interesse'};
 }
 function renderRoteiro(el){
   const locs = state.currentData.locations.filter(l=>!isBookingLocation(l));
@@ -1395,7 +1434,7 @@ function renderRoteiro(el){
     <div class="flex-head"><div><h2 class="section-title" style="margin-bottom:4px">Roteiro &amp; percurso</h2><div class="check-meta">Reservas, transportes, alojamentos e locais aparecem juntos por data e hora. A hora é sempre opcional.</div></div><div style="display:flex;gap:8px"><button class="btn btn-sm" onclick="openBookingModal('create')">+ Reserva</button><button class="btn btn-sm btn-primary" onclick="openLocationModal('create')">+ Local</button></div></div>
     <div class="itin-layout" style="margin-top:18px"><div><div id="itinList">
       ${dayKeys.length?dayKeys.map(day=>`<div class="day-group"><div class="day-label">${day==='Sem data'?'Sem data':new Date(day+'T00:00:00').toLocaleDateString('pt-PT',{weekday:'long',day:'2-digit',month:'short'})}</div>${grouped[day].map(e=>e.kind==='booking'?renderBookingTimelineItem(e.data):renderLocItem(e.data)).join('')}</div>`).join(''):'<p style="color:var(--text-dim);font-size:14px">Ainda não existem elementos no roteiro.</p>'}
-    </div></div><div><div id="mapCanvas" class="map-canvas"></div><div class="map-legend">📍 O mapa inclui locais de interesse e locais associados às reservas. Roda a roda do rato ou belisca para dar zoom, arrasta para mover.</div><div class="map-credit">Mapa base: Wikimedia Commons, CC BY-SA 3.0</div></div></div>`;
+    </div></div><div><div id="mapCanvas" class="map-canvas"></div><div class="map-legend-swatches">${mapLegendSwatches()}</div><div class="map-legend">Passa o rato num pin para o identificar rapidamente, ou clica para ver detalhes. Roda a roda do rato ou belisca para dar zoom, arrasta para mover.</div><div class="map-credit">Mapa base: Wikimedia Commons, CC BY-SA 3.0</div></div></div>`;
   renderMapCanvas();
   const pinned = state.currentData.locations.filter(l=>l.x!=null && l.y!=null);
   const fitKey = pinned.map(l=>`${l.id}:${l.x}:${l.y}`).sort().join('|');
@@ -1445,8 +1484,18 @@ function renderMapCanvas(){
     inner += `<svg class="routes" viewBox="0 0 100 100" preserveAspectRatio="none"><polyline points="${path}" fill="none" stroke="#C9A24D" stroke-width="0.6" stroke-dasharray="2,2" opacity="0.7" vector-effect="non-scaling-stroke"/></svg>`;
   }
   locs.forEach((loc, i)=>{
+    const v = locationPinVisual(loc);
+    const when = loc.day ? `${fmtDateShort(loc.day)}${loc.time?' · '+loc.time:''}` : v.label;
     inner += `<div class="map-pin" style="left:${loc.x}%; top:${loc.y}%;" onclick="event.stopPropagation(); toggleMapPopover('${loc.id}')">
-      <div class="dot"><span>${i+1}</span></div>
+      <div class="pin-badge">
+        <div class="dot" style="background:${v.color};"><span>${v.icon}</span></div>
+        <span class="pin-num">${i+1}</span>
+      </div>
+      <div class="pin-tip">
+        <div class="pin-tip-cat">${escapeHtml(v.label)}</div>
+        <div class="pin-tip-title">${escapeHtml(loc.name)}</div>
+        <div class="pin-tip-meta">${escapeHtml(when)}</div>
+      </div>
     </div>`;
   });
   if(state.mapPopoverId){
