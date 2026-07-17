@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Diário de Viagem</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.0/chart.umd.min.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
 
@@ -1158,16 +1158,16 @@ function daysBetween(start, end){
   return Math.max(1, Math.round((b-a)/86400000)+1);
 }
 
-function renderCategoryChart(expenses, currency){
-  const ctx = document.getElementById('catChart');
+function renderCategoryChart(expenses, currency, canvasId='catChart', slot='cat'){
+  const ctx = document.getElementById(canvasId);
   if(!ctx) return;
   const totals = CATEGORIES.map(c => expenses.filter(e=>e.categoryKey===c.key).reduce((s,e)=>s+Number(e.amount||0),0));
-  if(state.charts.cat) state.charts.cat.destroy();
+  if(state.charts[slot]) state.charts[slot].destroy();
   if(totals.every(t=>t===0)){
     ctx.replaceWith(Object.assign(document.createElement('div'), {className:'map-empty-hint', style:'position:static;padding:40px 0;', textContent:'Ainda sem despesas registadas.'}));
     return;
   }
-  state.charts.cat = new Chart(ctx, {
+  state.charts[slot] = new Chart(ctx, {
     type:'doughnut',
     data:{ labels: CATEGORIES.map(c=>c.label), datasets:[{ data: totals, backgroundColor: CATEGORIES.map(c=>c.color), borderColor:'#152437', borderWidth:2 }]},
     options:{
@@ -1573,12 +1573,57 @@ function openBookingModal(mode,id,prefill=null){
 function renderDespesas(el){
   const filterKey = state.expenseFilter || 'todas';
   const info = state.currentData.info;
-  let expenses = [...state.currentData.expenses].sort((a,b)=> (b.date||'').localeCompare(a.date||''));
+  const allExpenses = state.currentData.expenses;
+  let expenses = [...allExpenses].sort((a,b)=> (b.date||'').localeCompare(a.date||''));
   if(filterKey !== 'todas') expenses = expenses.filter(e=>e.categoryKey===filterKey);
   const total = expenses.reduce((s,e)=>s+Number(e.amount||0),0);
 
+  const totalSpent = allExpenses.reduce((s,e)=>s+Number(e.amount||0),0);
+  const totalBudget = Number(info.budgetTotal||0);
+  const remaining = totalBudget - totalSpent;
+  const bookingSpend = allExpenses.filter(e=>e.bookingId).reduce((s,e)=>s+Number(e.amount||0),0);
+  const today = todayLocalISO();
+  const tripNotStarted = info.startDate && info.startDate > today;
+  const daysToGo = tripNotStarted ? daysBetween(today, info.startDate) : null;
+
+  const catBreakdown = CATEGORIES.map(c=>({
+    ...c, spent: allExpenses.filter(e=>e.categoryKey===c.key).reduce((s,e)=>s+Number(e.amount||0),0)
+  })).filter(c=>c.spent>0).sort((a,b)=>b.spent-a.spent);
+
   el.innerHTML = `
     <h2 class="section-title">Despesas</h2>
+    ${bookingSpend>0.005 ? `
+    <div class="hero-progress" style="padding:16px 22px; margin-bottom:20px;">
+      <div class="desc" style="min-width:0;">
+        <h3 style="font-size:15.5px;">💡 ${tripNotStarted
+          ? `A viagem começa daqui a ${daysToGo} dia(s), mas já tens ${fmtMoney(bookingSpend, info.currency)} comprometidos em reservas.`
+          : `${fmtMoney(bookingSpend, info.currency)} já gastos em reservas (voos, alojamento, etc.).`}</h3>
+        <p>Isto já conta para o teu orçamento${totalBudget>0 ? ` — ${Math.round(bookingSpend/totalBudget*100)}% do total planeado` : ''}, mesmo antes de qualquer dia da viagem ter passado. Vale a pena rever o orçamento por categoria agora, enquanto ainda dá para ajustar.</p>
+      </div>
+    </div>` : ''}
+    <div class="stat-row">
+      <div class="stat-card"><div class="label">Gasto total</div><div class="value ${totalBudget>0 && totalSpent>totalBudget?'over':''}">${fmtMoney(totalSpent, info.currency)}</div></div>
+      <div class="stat-card"><div class="label">Orçamento restante</div><div class="value ${remaining<0?'over':'ok'}">${totalBudget>0 ? fmtMoney(remaining, info.currency) : '—'}</div></div>
+      <div class="stat-card"><div class="label">Já em reservas</div><div class="value">${fmtMoney(bookingSpend, info.currency)}</div></div>
+      <div class="stat-card"><div class="label">Outras despesas</div><div class="value">${fmtMoney(totalSpent-bookingSpend, info.currency)}</div></div>
+    </div>
+    <div class="chart-row" style="margin-bottom:26px;">
+      <div class="chart-card">
+        <h4>Gastos por categoria</h4>
+        <canvas id="despCatChart"></canvas>
+      </div>
+      <div class="chart-card">
+        <h4>Por categoria, do maior ao menor</h4>
+        ${catBreakdown.length ? catBreakdown.map(c=>`
+          <div class="cat-budget-row">
+            <div class="cat-budget-head">
+              <div class="name">${c.icon} ${c.label}</div>
+              <div class="nums">${fmtMoney(c.spent, info.currency)} · ${totalSpent>0?Math.round(c.spent/totalSpent*100):0}%</div>
+            </div>
+            <div class="bar-track"><div class="bar-fill" style="width:${totalSpent>0?Math.round(c.spent/totalSpent*100):0}%; background:${c.color};"></div></div>
+          </div>`).join('') : '<p style="color:var(--text-dim); font-size:13px;">Ainda sem despesas registadas.</p>'}
+      </div>
+    </div>
     <div class="expense-toolbar">
       <div class="filter-row">
         <label style="font-family:var(--font-mono); font-size:11px; color:var(--text-dim); text-transform:uppercase;">Categoria</label>
@@ -1598,6 +1643,7 @@ function renderDespesas(el){
     state.expenseFilter = e.target.value;
     renderDespesas(document.getElementById('panelContent'));
   });
+  renderCategoryChart(allExpenses, info.currency, 'despCatChart', 'despCat');
 }
 
 function renderTicket(e){
@@ -1826,6 +1872,9 @@ function renderOrcamento(el){
   const info = state.currentData.info;
   const cats = state.currentData.budgetCategories;
   const expenses = state.currentData.expenses;
+  const totalBudget = Number(info.budgetTotal||0);
+  const allocated = cats.reduce((s,c)=>s+Number(c.planned||0),0);
+  const free = totalBudget - allocated;
 
   el.innerHTML = `
     <h2 class="section-title">Orçamento</h2>
@@ -1835,6 +1884,17 @@ function renderOrcamento(el){
       <span style="color:var(--text-dim); font-size:13px;">${info.currency}</span>
       <button class="btn btn-sm" id="saveBudgetTotalBtn">Guardar</button>
     </div>
+    ${totalBudget>0 ? `
+    <div class="stat-row">
+      <div class="stat-card"><div class="label">Orçamento total</div><div class="value">${fmtMoney(totalBudget, info.currency)}</div></div>
+      <div class="stat-card"><div class="label">Atribuído a categorias</div><div class="value">${fmtMoney(allocated, info.currency)}</div></div>
+      <div class="stat-card"><div class="label">${free<0?'Categorias acima do total':'Orçamento livre'}</div><div class="value ${free<0?'over':'ok'}">${fmtMoney(Math.abs(free), info.currency)}</div></div>
+    </div>
+    <p style="font-size:12.5px; color:var(--text-dim); margin:-14px 0 20px; line-height:1.5;">
+      ${free<0
+        ? 'As categorias juntas ultrapassam o orçamento total — ajusta os valores abaixo ou aumenta o orçamento total.'
+        : 'Orçamento livre é o que ainda não atribuíste a nenhuma categoria — dá para gastar onde precisares, sem categoria fixa.'}
+    </p>` : ''}
 
     <div id="catBudgetRows">
       ${CATEGORIES.map(c=>{
