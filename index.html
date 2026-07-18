@@ -511,13 +511,25 @@ function mergeTripData(remoteData, localData){
     mergedTombstones[k] = [...new Set([...r, ...l])];
   });
   merged.tombstones = mergedTombstones;
-  for(const key of ['locations','expenses','bookings','people','advances','tasks','packingLists','budgetCategories']){
+  for(const key of ['locations','expenses','bookings','people','advances','tasks','budgetCategories']){
     let list = mergeRecords(remoteData[key], localData[key]);
     if(mergedTombstones[key] && mergedTombstones[key].length){
       list = list.filter(item => item && item.id != null && !mergedTombstones[key].includes(String(item.id)));
     }
     merged[key] = list;
   }
+  // As listas da mala são aninhadas (lista -> items); um merge raso por id da lista
+  // descartava por completo os items adicionados no "outro" dispositivo sempre que a
+  // mesma lista fosse editada nos dois. Aqui fazem-se os dois níveis de merge.
+  const remoteLists = remoteData.packingLists || [];
+  const localLists = localData.packingLists || [];
+  const listIds = [...new Set([...remoteLists.map(l=>l.id), ...localLists.map(l=>l.id)])];
+  merged.packingLists = listIds.map(id=>{
+    const r = remoteLists.find(l=>l.id===id);
+    const l = localLists.find(l=>l.id===id);
+    if(r && l) return {...l, items: mergeRecords(r.items, l.items)};
+    return l || r;
+  });
   return ensureShape(merged);
 }
 function mergeSyncPayload(remote, local){
@@ -1759,7 +1771,7 @@ async function searchBookingPlace(kind){
   if(!navigator.onLine){status.textContent='Sem internet: o local será guardado pelo nome e poderá ser localizado no mapa mais tarde.';status.style.color='var(--gold)';box.innerHTML='';return;}
   status.textContent='A procurar…';status.style.color='var(--text-dim)';box.innerHTML='';
   try{
-    const url=`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&addressdetails=1&q=${encodeURIComponent(q)}`;
+    const url=`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=10&addressdetails=1&q=${encodeURIComponent(q)}`;
     const res=await fetch(url,{headers:{'Accept-Language':'pt-PT,pt;q=0.9,en;q=0.7'}});if(!res.ok)throw new Error(`HTTP ${res.status}`);
     const rows=await res.json();if(!rows.length)throw new Error('Local não encontrado');
     status.textContent=`${rows.length} resultado${rows.length>1?'s':''} — escolhe o local certo:`;status.style.color='var(--text-dim)';
@@ -2404,7 +2416,7 @@ function openLocationModal(mode, id){
 async function searchAddressForLocation(){
   const q=document.getElementById('l_address').value.trim(), box=document.getElementById('addressResults');
   if(!q)return; box.innerHTML='<span style="font-size:12px;color:var(--text-dim)">A pesquisar…</span>';
-  try{const res=await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&q=${encodeURIComponent(q)}`,{headers:{'Accept-Language':'pt'}});if(!res.ok)throw new Error('Pesquisa indisponível');const items=await res.json();box.innerHTML=items.length?items.map((r,i)=>`<button type="button" class="search-result" data-i="${i}">${escapeHtml(r.display_name)}</button>`).join(''):'<span style="font-size:12px;color:var(--text-dim)">Nenhum resultado.</span>';box.querySelectorAll('button').forEach(b=>b.onclick=()=>{const r=items[Number(b.dataset.i)];document.getElementById('l_address').value=r.display_name;if(!document.getElementById('l_name').value.trim())document.getElementById('l_name').value=(r.name||r.display_name.split(',')[0]);state.modalPendingXY=mapXYFromCoords(r.lat,r.lon);drawSelectedGeocodePin();box.innerHTML='';});}catch(err){box.innerHTML=`<span style="font-size:12px;color:var(--coral)">${escapeHtml(err.message)}. Também podes marcar manualmente no mapa.</span>`;}
+  try{const res=await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=10&addressdetails=1&q=${encodeURIComponent(q)}`,{headers:{'Accept-Language':'pt'}});if(!res.ok)throw new Error('Pesquisa indisponível');const items=await res.json();box.innerHTML=items.length?items.map((r,i)=>`<button type="button" class="search-result" data-i="${i}">${escapeHtml(r.display_name)}</button>`).join(''):'<span style="font-size:12px;color:var(--text-dim)">Nenhum resultado.</span>';box.querySelectorAll('button').forEach(b=>b.onclick=()=>{const r=items[Number(b.dataset.i)];document.getElementById('l_address').value=r.display_name;if(!document.getElementById('l_name').value.trim())document.getElementById('l_name').value=(r.name||r.display_name.split(',')[0]);state.modalPendingXY=mapXYFromCoords(r.lat,r.lon);drawSelectedGeocodePin();box.innerHTML='';});}catch(err){box.innerHTML=`<span style="font-size:12px;color:var(--coral)">${escapeHtml(err.message)}. Também podes marcar manualmente no mapa.</span>`;}
 }
 function drawSelectedGeocodePin(){const mini=document.getElementById('miniMap');if(!mini||!state.modalPendingXY)return;mini.querySelector('.pin-preview')?.remove();mini.querySelector('.hint').style.display='none';const pin=document.createElement('div');pin.className='pin-preview';pin.style.left=state.modalPendingXY.x+'%';pin.style.top=state.modalPendingXY.y+'%';mini.appendChild(pin);}
 
