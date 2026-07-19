@@ -1,0 +1,11 @@
+{
+  "name": "Diário de Viagem",
+  "short_name": "Diário",
+  "description": "Gestão de viagens offline-first com roteiro, reservas, locais e mapa.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0F1B2B",
+  "theme_color": "#0F1B2B",
+  "lang": "pt-PT"
+}

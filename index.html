@@ -3,6 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" id="themeColorMeta" content="#0F1B2B">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.json">
 <title>Diário de Viagem</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.0/chart.umd.min.js"></script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
@@ -11,6 +17,7 @@
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
 
 :root{
+  color-scheme: dark;
   --bg:#0F1B2B;
   --bg-alt:#0B141F;
   --panel:#152437;
@@ -295,6 +302,7 @@ select:focus, input:focus, textarea:focus{outline:2px solid var(--gold); outline
 
 /* ---------- Tema claro, mobile e fundos ---------- */
 :root[data-theme="light"]{
+  color-scheme: light;
   --bg:#F4F7FB; --bg-alt:#EAF0F7; --panel:#FFFFFF; --panel-alt:#F5F8FC;
   --linen:#17324D; --linen-dim:#48627A; --gold:#B97816; --gold-dim:#D7A34E;
   --teal:#147D75; --coral:#C94E43; --sage:#3F8B59; --slate-blue:#5277A3;
@@ -506,6 +514,12 @@ function mergeTripData(remoteData, localData){
   if(!remoteData) return ensureShape(localData);
   if(!localData) return ensureShape(remoteData);
   const merged = {...remoteData, ...localData};
+  // Nota: info/modules são objetos simples, sem id nem timestamp por campo, por isso
+  // usam "o local ganha tudo" em caso de conflito (o spread acima já dá isso). Se
+  // mudares o nome da viagem num dispositivo e o orçamento noutro antes de sincronizar,
+  // uma das alterações perde-se — não há como fundir campo a campo sem saber qual foi
+  // alterado mais recentemente. Na prática o push automático corre ~1.2s depois de
+  // cada edição, por isso a janela para isto acontecer é pequena.
   const mergedTombstones = {};
   TOMBSTONE_KEYS.forEach(k=>{
     const r = (remoteData.tombstones && remoteData.tombstones[k]) || [];
@@ -559,6 +573,14 @@ function mergeSyncPayload(remote, local){
     if(deletedTripIds.includes(String(id))) continue;
     tripsData[id] = mergeTripData(remote?.tripsData?.[id], local?.tripsData?.[id]);
   }
+  // A entrada de cada viagem na lista `trips` é só um resumo (nome, datas, orçamento)
+  // usado no seletor de viagens — pode ficar dessincronizada da fonte autoritativa
+  // (tripsData[id].info, já fundida campo a campo acima) se `mergeRecords` escolher
+  // a versão de um dos lados por inteiro. Reconstrói-se aqui a partir da fonte certa.
+  trips = trips.map(t => {
+    const data = tripsData[String(t.id)];
+    return data ? {...t, ...pickIndexFields(data.info)} : t;
+  });
   return {updatedAt:new Date().toISOString(), trips, tripsData, deletedTripIds};
 }
 async function buildLocalSyncPayload(){
@@ -709,10 +731,10 @@ function blankTripData(info){
     packingLists: [{id:uid(), name:'Mala principal', items:[], parentId:null, icon:'🎒', color:CATEGORY_COLOR_CHOICES[0]}],
     modules: {today:true,locations:true,bookings:true,preparation:true,expenses:true,budget:true,dashboard:true},
     budgetCategories: DEFAULT_CATEGORIES.map(c=>({id:c.key, key:c.key, label:c.label, icon:c.icon, color:c.color, planned:0})),
-    tombstones: {locations:[], expenses:[], bookings:[], advances:[], people:[], tasks:[], packingLists:[], packingItems:[]},
+    tombstones: {locations:[], expenses:[], bookings:[], advances:[], people:[], tasks:[], packingLists:[], packingItems:[], budgetCategories:[]},
   };
 }
-const TOMBSTONE_KEYS = ['locations','expenses','bookings','advances','people','tasks','packingLists','packingItems'];
+const TOMBSTONE_KEYS = ['locations','expenses','bookings','advances','people','tasks','packingLists','packingItems','budgetCategories'];
 function ensureShape(data){
   if(!data) return data;
   if(!data.bookings) data.bookings = [];
@@ -989,7 +1011,7 @@ function normalizeImportedTrip(tripData){
   const catKeys = new Set(tripData.budgetCategories.map(c=>c.key));
   const fallbackCatKey = tripData.budgetCategories[0]?.key || 'outros';
   tripData.expenses = (tripData.expenses||[]).map(e=>({
-    id: e.id || uid(), date: e.date||'', categoryKey: catKeys.has(e.categoryKey) ? e.categoryKey : fallbackCatKey,
+    id: e.id || uid(), date: e.date||'', time: e.time||'', categoryKey: catKeys.has(e.categoryKey) ? e.categoryKey : fallbackCatKey,
     description: e.description||'', amount: Number(e.amount)||0, locationId: e.locationId||null, bookingId: e.bookingId||null,
     paidBy: e.paidBy||null, splitWith: Array.isArray(e.splitWith) ? e.splitWith : [],
   }));
@@ -1050,16 +1072,26 @@ function initTheme(){
   const preferred = saved || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
   document.documentElement.dataset.theme = preferred;
   updateThemeButton();
+  updateThemeColorMeta();
 }
 function toggleTheme(){
   document.documentElement.dataset.theme = document.documentElement.dataset.theme==='light' ? 'dark' : 'light';
   localStorage.setItem('travel-theme', document.documentElement.dataset.theme);
   updateThemeButton();
+  updateThemeColorMeta();
   if(state.currentData) renderCurrentTab();
 }
 function updateThemeButton(){
   const b=document.getElementById('themeBtn'); if(!b) return;
   b.textContent=document.documentElement.dataset.theme==='light'?'🌙 Escuro':'☀️ Claro';
+}
+function updateThemeColorMeta(){
+  // Sem isto, alguns Android (Samsung Internet incluído) tentam "adivinhar" o tema
+  // da página e aplicam um escurecimento automático estranho por cima do nosso CSS
+  // quando adicionada como app. Isto dá-lhes o valor certo, sempre atualizado.
+  const meta = document.getElementById('themeColorMeta');
+  if(!meta) return;
+  meta.setAttribute('content', cssVar('--bg') || '#0F1B2B');
 }
 
 function renderHeader(){
@@ -2034,7 +2066,7 @@ function renderTicket(e){
       <div class="cat-chip" style="background:${c.color}22; border:1px solid ${c.color}55;">${c.icon}</div>
       <div class="info">
         <div class="desc">${escapeHtml(e.description || c.label)}</div>
-        <div class="meta">${e.date ? fmtDateShort(e.date) : 'Sem data'} · ${c.label}${loc ? ' · '+escapeHtml(loc.name) : ''}${booking ? ' · '+escapeHtml(booking.provider||'Reserva') : ''}${paymentMeta}</div>
+        <div class="meta">${e.date ? fmtDateShort(e.date) : 'Sem data'}${e.time ? ' · '+escapeHtml(e.time) : ''} · ${c.label}${loc ? ' · '+escapeHtml(loc.name) : ''}${booking ? ' · '+escapeHtml(booking.provider||'Reserva') : ''}${paymentMeta}</div>
       </div>
       <div class="amount">${fmtMoney(e.amount, state.currentData.info.currency)}</div>
       <div class="actions">
@@ -2380,6 +2412,7 @@ function deleteCategory(key){
     ? `${count} despesa(s) usam esta categoria. Vão passar para "${fallback.label}". Eliminar mesmo assim?`
     : 'Eliminar esta categoria?';
   if(!confirm(msg)) return;
+  markDeleted('budgetCategories', key);
   state.currentData.budgetCategories = cats.filter(c=>c.key!==key);
   state.currentData.expenses.forEach(e=>{ if(e.categoryKey===key) e.categoryKey = fallback.key; });
   persistCurrentTrip();
@@ -2598,7 +2631,7 @@ async function searchAddressForLocation(){
 function openExpenseModal(mode, id){
   const editing = mode==='edit';
   const cats = getCategories();
-  const exp = editing ? state.currentData.expenses.find(e=>e.id===id) : {date:'', categoryKey:cats[0].key, description:'', amount:'', locationId:'', bookingId:'', paidBy:'', splitWith:[], fundAllocations:[]};
+  const exp = editing ? state.currentData.expenses.find(e=>e.id===id) : {date:'', time:'', categoryKey:cats[0].key, description:'', amount:'', locationId:'', bookingId:'', paidBy:'', splitWith:[], fundAllocations:[]};
   const locs = state.currentData.locations;
   const bookings = state.currentData.bookings||[];
   const people = state.currentData.people;
@@ -2608,11 +2641,15 @@ function openExpenseModal(mode, id){
     <div class="field-row">
       <div class="field">
         <label>Data (opcional)</label>
-        <input type="date" id="e_date" value="${exp.date||''}">
+        <div style="display:flex; gap:6px;">
+          <input type="date" id="e_date" value="${exp.date||''}" style="flex:1; min-width:0;">
+          <input type="time" id="e_time" value="${exp.time||''}" style="width:100px;">
+        </div>
       </div>
       <div class="field"><label>Categoria</label><select id="e_cat">${cats.map(c=>`<option value="${c.key}" ${exp.categoryKey===c.key?'selected':''}>${c.icon} ${c.label}</option>`).join('')}</select></div>
     </div>
-    <p style="font-size:12px; color:var(--text-dim); margin:-8px 0 14px; line-height:1.5;">Deixa em branco se a despesa não pertencer a um dia específico — por exemplo voos ou outras compras agregadas. Aparece como "sem data" nas estatísticas, mas continua a contar para o orçamento.</p>
+    <button type="button" class="btn btn-sm" id="e_now_btn" style="margin:-8px 0 14px;">🕐 Agora mesmo</button>
+    <p style="font-size:12px; color:var(--text-dim); margin:-6px 0 14px; line-height:1.5;">Deixa em branco se a despesa não pertencer a um dia específico — por exemplo voos ou outras compras agregadas. Aparece como "sem data" nas estatísticas, mas continua a contar para o orçamento.</p>
     <div class="field"><label>Descrição</label><input id="e_desc" value="${escapeHtml(exp.description||'')}" placeholder="Ex: Jantar em Shibuya"></div>
     <div class="field-row">
       <div class="field"><label>Valor (${state.currentData.info.currency})</label><input type="number" min="0" step="0.01" id="e_amount" value="${exp.amount}"></div>
@@ -2645,6 +2682,11 @@ function openExpenseModal(mode, id){
       <button class="btn btn-primary" id="saveExpBtn">${editing?'Guardar':'Adicionar'}</button>
     </div>
   `);
+  document.getElementById('e_now_btn').addEventListener('click', ()=>{
+    const now = new Date();
+    document.getElementById('e_date').value = todayLocalISO();
+    document.getElementById('e_time').value = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+  });
   document.getElementById('e_booking').addEventListener('change', (e)=>{
     const booking = bookings.find(b=>b.id===e.target.value);
     if(!booking) return;
@@ -2658,6 +2700,7 @@ function openExpenseModal(mode, id){
     const splitEls = document.querySelectorAll('.e_split:checked');
     const payload = {
       date: document.getElementById('e_date').value,
+      time: document.getElementById('e_time').value,
       categoryKey: document.getElementById('e_cat').value,
       description: document.getElementById('e_desc').value.trim(),
       amount,
