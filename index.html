@@ -254,6 +254,16 @@ select:focus, input:focus, textarea:focus{outline:2px solid var(--gold); outline
   position:fixed; top:0; left:0; z-index:999; pointer-events:none; background:var(--panel); border:1px solid var(--gold);
   border-radius:8px; padding:6px 12px; font-size:12.5px; box-shadow:0 6px 18px rgba(0,0,0,.35); color:var(--text);
 }
+.pack-collapse-btn{
+  width:18px; height:18px; flex-shrink:0; border:none; background:none; color:var(--text-dim); cursor:pointer;
+  display:flex; align-items:center; justify-content:center; font-size:11px; transition:transform .15s ease; padding:0;
+}
+.pack-collapse-btn.collapsed{transform:rotate(-90deg);}
+.pack-collapse-spacer{width:18px; flex-shrink:0; display:inline-block;}
+.pack-list-icon{
+  width:24px; height:24px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+  font-size:13px; flex-shrink:0;
+}
 .color-swatch{width:26px; height:26px; border-radius:50%; border:2px solid transparent; cursor:pointer; padding:0;}
 .color-swatch.selected{border-color:var(--text); box-shadow:0 0 0 2px var(--panel-alt);}
 #cat_color_custom{width:34px; height:26px; padding:0; border:1px solid var(--border); border-radius:6px; background:none; cursor:pointer;}
@@ -513,14 +523,20 @@ function mergeTripData(remoteData, localData){
   // As listas da mala são aninhadas (lista -> items); um merge raso por id da lista
   // descartava por completo os items adicionados no "outro" dispositivo sempre que a
   // mesma lista fosse editada nos dois. Aqui fazem-se os dois níveis de merge.
+  const packingListTombstones = mergedTombstones.packingLists || [];
+  const packingItemTombstones = mergedTombstones.packingItems || [];
   const remoteLists = remoteData.packingLists || [];
   const localLists = localData.packingLists || [];
-  const listIds = [...new Set([...remoteLists.map(l=>l.id), ...localLists.map(l=>l.id)])];
+  const listIds = [...new Set([...remoteLists.map(l=>l.id), ...localLists.map(l=>l.id)])]
+    .filter(id => !packingListTombstones.includes(String(id)));
   merged.packingLists = listIds.map(id=>{
     const r = remoteLists.find(l=>l.id===id);
     const l = localLists.find(l=>l.id===id);
-    if(r && l) return {...l, items: mergeRecords(r.items, l.items)};
-    return l || r;
+    let base = (r && l) ? {...l, items: mergeRecords(r.items, l.items)} : (l || r);
+    if(base && Array.isArray(base.items) && packingItemTombstones.length){
+      base = {...base, items: base.items.filter(i=>i && i.id!=null && !packingItemTombstones.includes(String(i.id)))};
+    }
+    return base;
   });
   return ensureShape(merged);
 }
@@ -690,13 +706,13 @@ function blankTripData(info){
     people: [],
     advances: [],
     tasks: [],
-    packingLists: [{id:uid(), name:'Mala principal', items:[], parentId:null}],
+    packingLists: [{id:uid(), name:'Mala principal', items:[], parentId:null, icon:'🎒', color:CATEGORY_COLOR_CHOICES[0]}],
     modules: {today:true,locations:true,bookings:true,preparation:true,expenses:true,budget:true,dashboard:true},
     budgetCategories: DEFAULT_CATEGORIES.map(c=>({id:c.key, key:c.key, label:c.label, icon:c.icon, color:c.color, planned:0})),
-    tombstones: {locations:[], expenses:[], bookings:[], advances:[], people:[], tasks:[]},
+    tombstones: {locations:[], expenses:[], bookings:[], advances:[], people:[], tasks:[], packingLists:[], packingItems:[]},
   };
 }
-const TOMBSTONE_KEYS = ['locations','expenses','bookings','advances','people','tasks'];
+const TOMBSTONE_KEYS = ['locations','expenses','bookings','advances','people','tasks','packingLists','packingItems'];
 function ensureShape(data){
   if(!data) return data;
   if(!data.bookings) data.bookings = [];
@@ -705,10 +721,14 @@ function ensureShape(data){
   if(!data.people) data.people = [];
   if(!data.advances) data.advances = [];
   if(!data.tasks) data.tasks = [];
-  if(!data.packingLists || !data.packingLists.length) data.packingLists = [{id:uid(), name:'Mala principal', items:[], parentId:null}];
+  if(!data.packingLists || !data.packingLists.length) data.packingLists = [{id:uid(), name:'Mala principal', items:[], parentId:null, icon:'🎒', color:CATEGORY_COLOR_CHOICES[0]}];
   else {
     const packIds = new Set(data.packingLists.map(l=>l.id));
-    data.packingLists.forEach(l=>{ if(!packIds.has(l.parentId)) l.parentId = null; });
+    data.packingLists.forEach((l,i)=>{
+      if(!packIds.has(l.parentId)) l.parentId = null;
+      if(!l.icon) l.icon = '🎒';
+      if(!l.color) l.color = CATEGORY_COLOR_CHOICES[i % CATEGORY_COLOR_CHOICES.length];
+    });
   }
   if(!data.modules) data.modules = {today:true,locations:true,bookings:true,preparation:true,expenses:true,budget:true,dashboard:true};
   if(!data.tombstones) data.tombstones = {};
@@ -760,6 +780,7 @@ const state = {
   activeTab: 'hoje',
   charts: {},
   mapView: {fitKey:null},
+  collapsedPackingLists: new Set(),
   modalPendingLatLon: null,
   deletedTripIds: [],
   sync: { owner:'', repo:'', path:'travel-data.json', branch:'main', token:'', enabled:false, sha:null, lastSyncedAt:null, statusMsg:'' },
@@ -1170,7 +1191,7 @@ function renderToday(el){
         <div class="list-card"><div class="flex-head"><h3 class="section-title">Falta tratar</h3><button class="btn btn-sm" onclick="openTaskModal()">+ Tarefa</button></div>${renderTaskRows(urgent)}</div>
         <div class="list-card"><div class="flex-head"><h3 class="section-title">Próximas reservas</h3><button class="btn btn-sm" onclick="state.activeTab='reservas';renderTabs();renderCurrentTab()">Ver carteira</button></div>${upcoming.length?upcoming.map(b=>renderAgendaRow({kind:'booking',data:b})).join(''):'<div class="check-meta">Ainda sem reservas guardadas.</div>'}</div>
       </div>
-      <div class="list-card" id="packingListsRoot" style="margin-top:18px"><div class="flex-head"><h3 class="section-title">Listas da mala</h3><button class="btn btn-sm" onclick="addPackingList()">+ Lista</button></div>${d.packingLists.filter(l=>!l.parentId).map(l=>renderPackingList(l,0)).join('')}</div>
+      <div class="list-card" id="packingListsRoot" style="margin-top:18px"><div class="flex-head"><h3 class="section-title">Listas da mala</h3><button class="btn btn-sm" onclick="openPackingListModal('create')">+ Lista</button></div>${d.packingLists.filter(l=>!l.parentId).map(l=>renderPackingList(l,0)).join('')}</div>
       <div class="list-card" style="margin-top:18px"><div class="flex-head"><h3 class="section-title">Ideias e locais por visitar</h3><button class="btn btn-sm" onclick="state.activeTab='roteiro';renderTabs();renderCurrentTab()">Ver todos</button></div>${ideas.length?ideas.map(renderInterestRow).join(''):'<div class="check-meta">Adiciona locais sem data para teres uma lista flexível de ideias.</div>'}</div>`;
     bindPackingDragHandles();
     return;
@@ -1247,7 +1268,7 @@ function renderPreparation(el){
  const roots = d.packingLists.filter(l=>!l.parentId);
  el.innerHTML=`<div class="flex-head"><div><h2 class="section-title" style="margin-bottom:4px">Preparação</h2><div class="check-meta">Tarefas e malas são opcionais e funcionam totalmente offline.</div></div><button class="btn btn-primary" onclick="openTaskModal()">+ Tarefa</button></div>
  <div class="chart-row" style="margin-top:20px"><div class="list-card"><div class="flex-head"><h3 class="section-title">Falta tratar</h3></div>${renderTaskRows(pending)}${done.length?`<details style="margin-top:12px"><summary class="check-meta">${done.length} concluída(s)</summary>${renderTaskRows(done)}</details>`:''}</div>
- <div class="list-card" id="packingListsRoot"><div class="flex-head"><h3 class="section-title">Listas da mala</h3><button class="btn btn-sm" onclick="addPackingList()">+ Lista</button></div><div class="check-meta" style="margin-bottom:10px;">Arrasta o ⠿ de uma lista para dentro de outra para a tornar numa sub-lista.</div>${roots.map(l=>renderPackingList(l,0)).join('')}</div></div>`;
+ <div class="list-card" id="packingListsRoot"><div class="flex-head"><h3 class="section-title">Listas da mala</h3><button class="btn btn-sm" onclick="openPackingListModal('create')">+ Lista</button></div><div class="check-meta" style="margin-bottom:10px;">Arrasta o ⠿ de uma lista para dentro de outra para a tornar numa sub-lista.</div>${roots.map(l=>renderPackingList(l,0)).join('')}</div></div>`;
  bindPackingDragHandles();
 }
 function packingChildren(listId){ return state.currentData.packingLists.filter(l=>l.parentId===listId); }
@@ -1269,25 +1290,38 @@ function isPackingDescendantOf(maybeDescendantId, ancestorId){
   }
   return false;
 }
+function togglePackingCollapse(listId){
+  if(state.collapsedPackingLists.has(listId)) state.collapsedPackingLists.delete(listId);
+  else state.collapsedPackingLists.add(listId);
+  renderCurrentTab();
+}
 function renderPackingList(list, depth){
   const prog = packingListProgress(list);
   const children = packingChildren(list.id);
   const empty = !list.items.length && !children.length;
+  const hasContent = list.items.length>0 || children.length>0;
+  const collapsed = state.collapsedPackingLists.has(list.id);
+  const icon = list.icon || '🎒', color = list.color || 'var(--gold)';
   return `<div class="pack-list-node${depth>0?' pack-nested':''}" data-list-id="${list.id}" style="margin-left:${depth*10}px">
     <div class="flex-head pack-list-head">
       <div style="display:flex; align-items:center; gap:8px; min-width:0;">
+        ${hasContent?`<button type="button" class="pack-collapse-btn ${collapsed?'collapsed':''}" title="${collapsed?'Expandir':'Minimizar'}" onclick="togglePackingCollapse('${list.id}')">▾</button>`:`<span class="pack-collapse-spacer"></span>`}
         <span class="pack-drag-handle" title="Arrastar para dentro de outra lista">⠿</span>
+        <div class="pack-list-icon" style="background:${color}22; border:1px solid ${color}55;">${icon}</div>
         <div style="min-width:0;"><strong>${escapeHtml(list.name)}</strong><div class="check-meta">${prog.done}/${prog.total} preparados</div></div>
       </div>
       <div style="display:flex; gap:2px; flex-shrink:0;">
         <button class="btn btn-sm" onclick="openPackingItemModal('${list.id}')">+ Item</button>
-        <button class="btn btn-sm" onclick="addPackingList('${list.id}')">+ Sub-lista</button>
+        <button class="btn btn-sm" onclick="openPackingListModal('create','${list.id}')">+ Sub-lista</button>
+        <button class="icon-btn" title="Editar lista" onclick="openPackingListModal('edit','${list.id}')">✎</button>
         <button class="icon-btn" title="Eliminar lista" onclick="deletePackingList('${list.id}')">🗑</button>
       </div>
     </div>
+    ${collapsed ? '' : `
     ${list.items.map(i=>`<div class="check-row ${i.done?'done':''}"><button class="round-check ${i.done?'checked':''}" onclick="togglePackingItem('${list.id}','${i.id}')">${i.done?'✓':''}</button><div class="check-main"><div class="check-title">${escapeHtml(i.name)}</div><div class="check-meta">${i.qty?`Quantidade: ${escapeHtml(i.qty)}`:''}${i.owner?` · ${escapeHtml(i.owner)}`:''}</div></div><button class="icon-btn" onclick="deletePackingItem('${list.id}','${i.id}')">🗑</button></div>`).join('')}
     ${empty?'<div class="check-meta" style="padding:10px 0">Lista vazia.</div>':''}
     ${children.length?`<div class="pack-sublists">${children.map(c=>renderPackingList(c, depth+1)).join('')}</div>`:''}
+    `}
   </div>`;
 }
 function bindPackingDragHandles(){
@@ -1339,10 +1373,54 @@ function bindPackingDragHandles(){
 function openTaskModal(){openModal(`<h3>Nova tarefa</h3><div class="field"><label>O que falta tratar?</label><input id="t_title" placeholder="Ex: fazer check-in do voo"></div><div class="field-row"><div class="field"><label>Prazo (opcional)</label><input type="date" id="t_due"></div><div class="field"><label>Responsável (opcional)</label><input id="t_owner"></div></div><div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" id="saveTask">Adicionar</button></div>`);document.getElementById('saveTask').onclick=()=>{const title=document.getElementById('t_title').value.trim();if(!title)return;state.currentData.tasks.push({id:uid(),title,dueDate:document.getElementById('t_due').value,owner:document.getElementById('t_owner').value.trim(),done:false});persistCurrentTrip();closeModal();renderCurrentTab();};}
 function toggleTask(id){const t=state.currentData.tasks.find(x=>x.id===id);if(t){t.done=!t.done;persistCurrentTrip();renderCurrentTab();}}
 function deleteTask(id){markDeleted('tasks', id);state.currentData.tasks=state.currentData.tasks.filter(x=>x.id!==id);persistCurrentTrip();renderCurrentTab();}
-function addPackingList(parentId){
-  const name=prompt('Nome da lista:','Mochila');if(!name)return;
-  state.currentData.packingLists.push({id:uid(),name,items:[],parentId:parentId||null});
-  persistCurrentTrip();renderCurrentTab();
+function openPackingListModal(mode, idOrParentId){
+  const editing = mode==='edit';
+  const list = editing ? state.currentData.packingLists.find(l=>l.id===idOrParentId) : {name:'', icon:'🎒', color:nextAvailableCategoryColor()};
+  if(editing && !list) return;
+  let selectedColor = list.color;
+  openModal(`
+    <h3>${editing?'Editar lista':'Nova lista'}</h3>
+    <div class="field-row">
+      <div class="field" style="max-width:100px;"><label>Emoji</label><input id="pl_icon" maxlength="4" value="${escapeHtml(list.icon||'')}" placeholder="🎒" style="text-align:center; font-size:20px;"></div>
+      <div class="field"><label>Nome</label><input id="pl_name" value="${escapeHtml(list.name||'')}" placeholder="Ex: Mochila"></div>
+    </div>
+    <div class="field"><label>Cor</label>
+      <div id="plColorSwatches" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+        ${CATEGORY_COLOR_CHOICES.map(col=>`<button type="button" class="color-swatch ${list.color===col?'selected':''}" data-color="${col}" style="background:${col}"></button>`).join('')}
+        <input type="color" id="pl_color_custom" value="${list.color}" title="Cor personalizada">
+      </div>
+    </div>
+    <div class="modal-actions">
+      ${editing?`<button class="btn btn-danger" style="margin-right:auto" onclick="closeModal();deletePackingList('${list.id}')">Eliminar</button>`:''}
+      <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" id="savePackListBtn">${editing?'Guardar':'Adicionar'}</button>
+    </div>
+  `);
+  document.querySelectorAll('#plColorSwatches .color-swatch').forEach(sw=>{
+    sw.onclick = ()=>{
+      selectedColor = sw.dataset.color;
+      document.querySelectorAll('#plColorSwatches .color-swatch').forEach(s=>s.classList.remove('selected'));
+      sw.classList.add('selected');
+      document.getElementById('pl_color_custom').value = selectedColor;
+    };
+  });
+  document.getElementById('pl_color_custom').addEventListener('input', (e)=>{
+    selectedColor = e.target.value;
+    document.querySelectorAll('#plColorSwatches .color-swatch').forEach(s=>s.classList.remove('selected'));
+  });
+  document.getElementById('savePackListBtn').addEventListener('click', ()=>{
+    const name = document.getElementById('pl_name').value.trim();
+    if(!name){ alert('Dá um nome à lista.'); return; }
+    const icon = document.getElementById('pl_icon').value.trim() || '🎒';
+    if(editing){
+      Object.assign(list, {name, icon, color:selectedColor});
+    } else {
+      state.currentData.packingLists.push({id:uid(), name, items:[], parentId: idOrParentId||null, icon, color:selectedColor});
+    }
+    persistCurrentTrip();
+    closeModal();
+    renderCurrentTab();
+  });
 }
 function deletePackingList(listId){
   const list=state.currentData.packingLists.find(x=>x.id===listId);
@@ -1353,14 +1431,19 @@ function deletePackingList(listId){
     ? `Eliminar a lista "${list.name}", as suas ${descendants.length} sub-lista(s) e ${totalItems} item(ns) no total?`
     : `Eliminar a lista "${list.name}"${list.items.length?` e os seus ${list.items.length} item(ns)`:''}?`;
   if(!confirm(msg))return;
-  const idsToRemove = new Set([listId, ...descendants.map(l=>l.id)]);
+  const listsToRemove = [list, ...descendants];
+  listsToRemove.forEach(l=>{
+    markDeleted('packingLists', l.id);
+    l.items.forEach(i=>markDeleted('packingItems', i.id));
+  });
+  const idsToRemove = new Set(listsToRemove.map(l=>l.id));
   state.currentData.packingLists=state.currentData.packingLists.filter(x=>!idsToRemove.has(x.id));
   persistCurrentTrip();
   renderCurrentTab();
 }
 function openPackingItemModal(listId){openModal(`<h3>Adicionar à mala</h3><div class="field"><label>Elemento</label><input id="p_name" placeholder="Ex: adaptador de tomada"></div><div class="field-row"><div class="field"><label>Quantidade (opcional)</label><input id="p_qty"></div><div class="field"><label>Responsável (opcional)</label><input id="p_owner"></div></div><div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" id="savePack">Adicionar</button></div>`);document.getElementById('savePack').onclick=()=>{const name=document.getElementById('p_name').value.trim();if(!name)return;const list=state.currentData.packingLists.find(x=>x.id===listId);list.items.push({id:uid(),name,qty:document.getElementById('p_qty').value.trim(),owner:document.getElementById('p_owner').value.trim(),done:false});persistCurrentTrip();closeModal();renderCurrentTab();};}
 function togglePackingItem(listId,id){const i=state.currentData.packingLists.find(x=>x.id===listId)?.items.find(x=>x.id===id);if(i){i.done=!i.done;persistCurrentTrip();renderCurrentTab();}}
-function deletePackingItem(listId,id){const l=state.currentData.packingLists.find(x=>x.id===listId);if(l){l.items=l.items.filter(x=>x.id!==id);persistCurrentTrip();renderCurrentTab();}}
+function deletePackingItem(listId,id){const l=state.currentData.packingLists.find(x=>x.id===listId);if(l){markDeleted('packingItems', id);l.items=l.items.filter(x=>x.id!==id);persistCurrentTrip();renderCurrentTab();}}
 
 /* ============================= DASHBOARD ============================= */
 function renderDashboard(el){
