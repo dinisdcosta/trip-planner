@@ -241,6 +241,19 @@ select:focus, input:focus, textarea:focus{outline:2px solid var(--gold); outline
 .bar-track{height:9px; border-radius:5px; background:#0B141F; overflow:hidden; border:1px solid var(--border);}
 .bar-fill{height:100%; border-radius:5px; transition:width .5s ease;}
 .cat-input{width:110px;}
+
+/* ---------- Listas da mala (aninhadas) ---------- */
+.pack-list-node{margin-bottom:14px;}
+.pack-list-node.pack-nested{padding-left:12px; border-left:2px solid var(--border);}
+.pack-list-head{margin-bottom:6px; gap:8px;}
+.pack-drag-handle{cursor:grab; color:var(--text-dim); font-size:15px; padding:2px 4px; touch-action:none; user-select:none; flex-shrink:0;}
+.pack-drag-handle:active{cursor:grabbing;}
+.pack-list-head.drop-target{outline:2px dashed var(--gold); outline-offset:3px; border-radius:8px; background:rgba(201,162,77,0.08);}
+.pack-sublists{margin-top:8px;}
+.pack-drag-ghost{
+  position:fixed; top:0; left:0; z-index:999; pointer-events:none; background:var(--panel); border:1px solid var(--gold);
+  border-radius:8px; padding:6px 12px; font-size:12.5px; box-shadow:0 6px 18px rgba(0,0,0,.35); color:var(--text);
+}
 .color-swatch{width:26px; height:26px; border-radius:50%; border:2px solid transparent; cursor:pointer; padding:0;}
 .color-swatch.selected{border-color:var(--text); box-shadow:0 0 0 2px var(--panel-alt);}
 #cat_color_custom{width:34px; height:26px; padding:0; border:1px solid var(--border); border-radius:6px; background:none; cursor:pointer;}
@@ -677,7 +690,7 @@ function blankTripData(info){
     people: [],
     advances: [],
     tasks: [],
-    packingLists: [{id:uid(), name:'Mala principal', items:[]}],
+    packingLists: [{id:uid(), name:'Mala principal', items:[], parentId:null}],
     modules: {today:true,locations:true,bookings:true,preparation:true,expenses:true,budget:true,dashboard:true},
     budgetCategories: DEFAULT_CATEGORIES.map(c=>({id:c.key, key:c.key, label:c.label, icon:c.icon, color:c.color, planned:0})),
     tombstones: {locations:[], expenses:[], bookings:[], advances:[], people:[], tasks:[]},
@@ -692,7 +705,11 @@ function ensureShape(data){
   if(!data.people) data.people = [];
   if(!data.advances) data.advances = [];
   if(!data.tasks) data.tasks = [];
-  if(!data.packingLists) data.packingLists = [{id:uid(), name:'Mala principal', items:[]}];
+  if(!data.packingLists || !data.packingLists.length) data.packingLists = [{id:uid(), name:'Mala principal', items:[], parentId:null}];
+  else {
+    const packIds = new Set(data.packingLists.map(l=>l.id));
+    data.packingLists.forEach(l=>{ if(!packIds.has(l.parentId)) l.parentId = null; });
+  }
   if(!data.modules) data.modules = {today:true,locations:true,bookings:true,preparation:true,expenses:true,budget:true,dashboard:true};
   if(!data.tombstones) data.tombstones = {};
   TOMBSTONE_KEYS.forEach(k=>{ if(!Array.isArray(data.tombstones[k])) data.tombstones[k] = []; });
@@ -1153,7 +1170,9 @@ function renderToday(el){
         <div class="list-card"><div class="flex-head"><h3 class="section-title">Falta tratar</h3><button class="btn btn-sm" onclick="openTaskModal()">+ Tarefa</button></div>${renderTaskRows(urgent)}</div>
         <div class="list-card"><div class="flex-head"><h3 class="section-title">Próximas reservas</h3><button class="btn btn-sm" onclick="state.activeTab='reservas';renderTabs();renderCurrentTab()">Ver carteira</button></div>${upcoming.length?upcoming.map(b=>renderAgendaRow({kind:'booking',data:b})).join(''):'<div class="check-meta">Ainda sem reservas guardadas.</div>'}</div>
       </div>
+      <div class="list-card" id="packingListsRoot" style="margin-top:18px"><div class="flex-head"><h3 class="section-title">Listas da mala</h3><button class="btn btn-sm" onclick="addPackingList()">+ Lista</button></div>${d.packingLists.filter(l=>!l.parentId).map(l=>renderPackingList(l,0)).join('')}</div>
       <div class="list-card" style="margin-top:18px"><div class="flex-head"><h3 class="section-title">Ideias e locais por visitar</h3><button class="btn btn-sm" onclick="state.activeTab='roteiro';renderTabs();renderCurrentTab()">Ver todos</button></div>${ideas.length?ideas.map(renderInterestRow).join(''):'<div class="check-meta">Adiciona locais sem data para teres uma lista flexível de ideias.</div>'}</div>`;
+    bindPackingDragHandles();
     return;
   }
 
@@ -1225,20 +1244,117 @@ function toggleLocationVisited(id){const l=state.currentData.locations.find(x=>x
 function renderTaskRows(tasks){return tasks.length?tasks.map(t=>`<div class="check-row ${t.done?'done':''}"><button class="round-check ${t.done?'checked':''}" onclick="toggleTask('${t.id}')">${t.done?'✓':''}</button><div class="check-main"><div class="check-title">${escapeHtml(t.title)}</div><div class="check-meta">${t.dueDate?'Até '+fmtDateShort(t.dueDate):'Sem prazo'}${t.owner?' · '+escapeHtml(t.owner):''}</div></div><button class="icon-btn" onclick="deleteTask('${t.id}')">🗑</button></div>`).join(''):'<div class="check-meta">Nada pendente.</div>'}
 function renderPreparation(el){
  const d=state.currentData, pending=d.tasks.filter(t=>!t.done), done=d.tasks.filter(t=>t.done);
+ const roots = d.packingLists.filter(l=>!l.parentId);
  el.innerHTML=`<div class="flex-head"><div><h2 class="section-title" style="margin-bottom:4px">Preparação</h2><div class="check-meta">Tarefas e malas são opcionais e funcionam totalmente offline.</div></div><button class="btn btn-primary" onclick="openTaskModal()">+ Tarefa</button></div>
  <div class="chart-row" style="margin-top:20px"><div class="list-card"><div class="flex-head"><h3 class="section-title">Falta tratar</h3></div>${renderTaskRows(pending)}${done.length?`<details style="margin-top:12px"><summary class="check-meta">${done.length} concluída(s)</summary>${renderTaskRows(done)}</details>`:''}</div>
- <div class="list-card"><div class="flex-head"><h3 class="section-title">Listas da mala</h3><button class="btn btn-sm" onclick="addPackingList()">+ Lista</button></div>${d.packingLists.map(renderPackingList).join('')}</div></div>`;
+ <div class="list-card" id="packingListsRoot"><div class="flex-head"><h3 class="section-title">Listas da mala</h3><button class="btn btn-sm" onclick="addPackingList()">+ Lista</button></div><div class="check-meta" style="margin-bottom:10px;">Arrasta o ⠿ de uma lista para dentro de outra para a tornar numa sub-lista.</div>${roots.map(l=>renderPackingList(l,0)).join('')}</div></div>`;
+ bindPackingDragHandles();
 }
-function renderPackingList(list){const checked=list.items.filter(i=>i.done).length;return `<div style="margin-bottom:18px"><div class="flex-head"><div><strong>${escapeHtml(list.name)}</strong><div class="check-meta">${checked}/${list.items.length} preparados</div></div><div style="display:flex;gap:2px"><button class="btn btn-sm" onclick="openPackingItemModal('${list.id}')">+ Item</button><button class="icon-btn" title="Eliminar lista" onclick="deletePackingList('${list.id}')">🗑</button></div></div>${list.items.map(i=>`<div class="check-row ${i.done?'done':''}"><button class="round-check ${i.done?'checked':''}" onclick="togglePackingItem('${list.id}','${i.id}')">${i.done?'✓':''}</button><div class="check-main"><div class="check-title">${escapeHtml(i.name)}</div><div class="check-meta">${i.qty?`Quantidade: ${escapeHtml(i.qty)}`:''}${i.owner?` · ${escapeHtml(i.owner)}`:''}</div></div><button class="icon-btn" onclick="deletePackingItem('${list.id}','${i.id}')">🗑</button></div>`).join('')||'<div class="check-meta" style="padding:10px 0">Lista vazia.</div>'}</div>`}
+function packingChildren(listId){ return state.currentData.packingLists.filter(l=>l.parentId===listId); }
+function packingDescendants(listId){
+  const direct = packingChildren(listId);
+  return direct.concat(direct.flatMap(l=>packingDescendants(l.id)));
+}
+function packingListProgress(list){
+  let total=list.items.length, done=list.items.filter(i=>i.done).length;
+  packingDescendants(list.id).forEach(sub=>{ total+=sub.items.length; done+=sub.items.filter(i=>i.done).length; });
+  return {total, done};
+}
+function isPackingDescendantOf(maybeDescendantId, ancestorId){
+  let cur = state.currentData.packingLists.find(l=>l.id===maybeDescendantId);
+  let guard=0;
+  while(cur && cur.parentId && guard++<50){
+    if(cur.parentId===ancestorId) return true;
+    cur = state.currentData.packingLists.find(l=>l.id===cur.parentId);
+  }
+  return false;
+}
+function renderPackingList(list, depth){
+  const prog = packingListProgress(list);
+  const children = packingChildren(list.id);
+  const empty = !list.items.length && !children.length;
+  return `<div class="pack-list-node${depth>0?' pack-nested':''}" data-list-id="${list.id}" style="margin-left:${depth*10}px">
+    <div class="flex-head pack-list-head">
+      <div style="display:flex; align-items:center; gap:8px; min-width:0;">
+        <span class="pack-drag-handle" title="Arrastar para dentro de outra lista">⠿</span>
+        <div style="min-width:0;"><strong>${escapeHtml(list.name)}</strong><div class="check-meta">${prog.done}/${prog.total} preparados</div></div>
+      </div>
+      <div style="display:flex; gap:2px; flex-shrink:0;">
+        <button class="btn btn-sm" onclick="openPackingItemModal('${list.id}')">+ Item</button>
+        <button class="btn btn-sm" onclick="addPackingList('${list.id}')">+ Sub-lista</button>
+        <button class="icon-btn" title="Eliminar lista" onclick="deletePackingList('${list.id}')">🗑</button>
+      </div>
+    </div>
+    ${list.items.map(i=>`<div class="check-row ${i.done?'done':''}"><button class="round-check ${i.done?'checked':''}" onclick="togglePackingItem('${list.id}','${i.id}')">${i.done?'✓':''}</button><div class="check-main"><div class="check-title">${escapeHtml(i.name)}</div><div class="check-meta">${i.qty?`Quantidade: ${escapeHtml(i.qty)}`:''}${i.owner?` · ${escapeHtml(i.owner)}`:''}</div></div><button class="icon-btn" onclick="deletePackingItem('${list.id}','${i.id}')">🗑</button></div>`).join('')}
+    ${empty?'<div class="check-meta" style="padding:10px 0">Lista vazia.</div>':''}
+    ${children.length?`<div class="pack-sublists">${children.map(c=>renderPackingList(c, depth+1)).join('')}</div>`:''}
+  </div>`;
+}
+function bindPackingDragHandles(){
+  document.querySelectorAll('.pack-drag-handle').forEach(handle=>{
+    handle.onpointerdown = (e)=>{
+      e.preventDefault();
+      const node = handle.closest('.pack-list-node');
+      const listId = node.dataset.listId;
+      const list = state.currentData.packingLists.find(l=>l.id===listId);
+      if(!list) return;
+      const ghost = document.createElement('div');
+      ghost.className = 'pack-drag-ghost';
+      ghost.textContent = '📦 ' + list.name;
+      document.body.appendChild(ghost);
+      const positionGhost = (ev)=>{ ghost.style.left=(ev.clientX+14)+'px'; ghost.style.top=(ev.clientY+10)+'px'; };
+      positionGhost(e);
+      const clearHighlights = ()=>document.querySelectorAll('.pack-list-head.drop-target').forEach(h=>h.classList.remove('drop-target'));
+      const move = (ev)=>{
+        positionGhost(ev);
+        clearHighlights();
+        const el = document.elementFromPoint(ev.clientX, ev.clientY);
+        const targetNode = el && el.closest('.pack-list-node');
+        if(targetNode && targetNode.dataset.listId!==listId && !isPackingDescendantOf(targetNode.dataset.listId, listId)){
+          targetNode.querySelector('.pack-list-head').classList.add('drop-target');
+        }
+      };
+      const up = (ev)=>{
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+        ghost.remove();
+        clearHighlights();
+        const el = document.elementFromPoint(ev.clientX, ev.clientY);
+        const targetNode = el && el.closest('.pack-list-node');
+        if(targetNode && targetNode.dataset.listId!==listId && !isPackingDescendantOf(targetNode.dataset.listId, listId)){
+          list.parentId = targetNode.dataset.listId;
+          persistCurrentTrip();
+          renderCurrentTab();
+        } else if(el && el.closest('#packingListsRoot') && !targetNode && list.parentId){
+          list.parentId = null;
+          persistCurrentTrip();
+          renderCurrentTab();
+        }
+      };
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up, {once:true});
+    };
+  });
+}
 function openTaskModal(){openModal(`<h3>Nova tarefa</h3><div class="field"><label>O que falta tratar?</label><input id="t_title" placeholder="Ex: fazer check-in do voo"></div><div class="field-row"><div class="field"><label>Prazo (opcional)</label><input type="date" id="t_due"></div><div class="field"><label>Responsável (opcional)</label><input id="t_owner"></div></div><div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" id="saveTask">Adicionar</button></div>`);document.getElementById('saveTask').onclick=()=>{const title=document.getElementById('t_title').value.trim();if(!title)return;state.currentData.tasks.push({id:uid(),title,dueDate:document.getElementById('t_due').value,owner:document.getElementById('t_owner').value.trim(),done:false});persistCurrentTrip();closeModal();renderCurrentTab();};}
 function toggleTask(id){const t=state.currentData.tasks.find(x=>x.id===id);if(t){t.done=!t.done;persistCurrentTrip();renderCurrentTab();}}
 function deleteTask(id){markDeleted('tasks', id);state.currentData.tasks=state.currentData.tasks.filter(x=>x.id!==id);persistCurrentTrip();renderCurrentTab();}
-function addPackingList(){const name=prompt('Nome da lista:','Mochila');if(!name)return;state.currentData.packingLists.push({id:uid(),name,items:[]});persistCurrentTrip();renderCurrentTab();}
+function addPackingList(parentId){
+  const name=prompt('Nome da lista:','Mochila');if(!name)return;
+  state.currentData.packingLists.push({id:uid(),name,items:[],parentId:parentId||null});
+  persistCurrentTrip();renderCurrentTab();
+}
 function deletePackingList(listId){
   const list=state.currentData.packingLists.find(x=>x.id===listId);
   if(!list)return;
-  if(!confirm(`Eliminar a lista "${list.name}"${list.items.length?` e os seus ${list.items.length} item(ns)`:''}?`))return;
-  state.currentData.packingLists=state.currentData.packingLists.filter(x=>x.id!==listId);
+  const descendants = packingDescendants(listId);
+  const totalItems = list.items.length + descendants.reduce((s,l)=>s+l.items.length,0);
+  const msg = descendants.length
+    ? `Eliminar a lista "${list.name}", as suas ${descendants.length} sub-lista(s) e ${totalItems} item(ns) no total?`
+    : `Eliminar a lista "${list.name}"${list.items.length?` e os seus ${list.items.length} item(ns)`:''}?`;
+  if(!confirm(msg))return;
+  const idsToRemove = new Set([listId, ...descendants.map(l=>l.id)]);
+  state.currentData.packingLists=state.currentData.packingLists.filter(x=>!idsToRemove.has(x.id));
   persistCurrentTrip();
   renderCurrentTab();
 }
