@@ -1280,6 +1280,13 @@ async function getDestinationCoords(){
     return {lat:info.destLat, lon:info.destLon, label};
   }catch(e){ return null; }
 }
+function coordsForDate(dateStr){
+  const candidates = (state.currentData.locations||[]).filter(l=>l.day===dateStr && l.lat!=null && l.lon!=null);
+  if(!candidates.length) return null;
+  candidates.sort((a,b)=>(a.time||'12:00').localeCompare(b.time||'12:00'));
+  const l = candidates[0];
+  return {lat:l.lat, lon:l.lon, label:l.name};
+}
 let weatherCache = null;
 async function fetchWeatherForecast(lat, lon){
   const key = `${lat.toFixed(2)},${lon.toFixed(2)}`;
@@ -1298,7 +1305,7 @@ async function loadAndRenderWeather(targetDate, firstDayLabel){
   const box = document.getElementById('weatherBox');
   if(!box) return;
   try{
-    const coords = await getDestinationCoords();
+    const coords = coordsForDate(targetDate) || await getDestinationCoords();
     if(!coords) return;
     const days = await fetchWeatherForecast(coords.lat, coords.lon);
     const startIdx = days.findIndex(x=>x.date===targetDate);
