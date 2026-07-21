@@ -397,6 +397,39 @@ function getCategories(){
   return (Array.isArray(cats) && cats.length) ? cats : DEFAULT_CATEGORIES;
 }
 const CURRENCIES = ['EUR','USD','GBP','BRL'];
+const EXPENSE_CURRENCIES = ['EUR','USD','GBP','JPY','CHF','CAD','AUD','BRL','CNY','INR','MXN','THB','TRY','SGD','HKD','KRW','NZD','ZAR','PLN','CZK','DKK','NOK','SEK','HUF','ILS','MYR','PHP','RON','ISK','IDR'];
+let fxRateCache = {};
+async function getExchangeRate(from, to){
+  if(from===to) return 1;
+  const key = `${from}_${to}`;
+  const cached = fxRateCache[key];
+  if(cached && (Date.now()-cached.fetchedAt)<3600000) return cached.rate;
+  const res = await fetch(`https://api.frankfurter.dev/v1/latest?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+  if(!res.ok) throw new Error('Falha ao obter câmbio');
+  const json = await res.json();
+  const rate = json.rates && json.rates[to];
+  if(rate==null) throw new Error('Câmbio indisponível para '+to);
+  fxRateCache[key] = {rate, fetchedAt:Date.now()};
+  return rate;
+}
+async function updateExpenseConversionHint(){
+  const amountEl = document.getElementById('e_amount');
+  const currEl = document.getElementById('e_curr');
+  const hint = document.getElementById('e_convert_hint');
+  if(!amountEl || !currEl || !hint || !state.currentData) return;
+  const tripCurrency = state.currentData.info.currency;
+  const selected = currEl.value;
+  const amount = Number(amountEl.value);
+  if(!amount || selected===tripCurrency){ hint.textContent=''; return; }
+  hint.textContent = 'A converter…';
+  try{
+    const rate = await getExchangeRate(selected, tripCurrency);
+    if(currEl.value!==selected || Number(amountEl.value)!==amount) return; // entretanto mudou, ignora resultado desatualizado
+    hint.textContent = `≈ ${fmtMoney(amount*rate, tripCurrency)} (1 ${selected} = ${rate.toFixed(4)} ${tripCurrency})`;
+  }catch(e){
+    hint.textContent = 'Sem internet para converter agora — fica guardado no valor introduzido.';
+  }
+}
 const BOOKING_CATEGORIES = [
   {key:'voo', label:'Voo', icon:'✈️'},
   {key:'alojamento', label:'Alojamento', icon:'🏨'},
@@ -1060,6 +1093,7 @@ function normalizeImportedTrip(tripData){
   tripData.expenses = (tripData.expenses||[]).map(e=>({
     id: e.id || uid(), date: e.date||'', time: e.time||'', categoryKey: catKeys.has(e.categoryKey) ? e.categoryKey : fallbackCatKey,
     description: e.description||'', amount: Number(e.amount)||0, locationId: e.locationId||null, bookingId: e.bookingId||null,
+    origAmount: e.origAmount!=null ? Number(e.origAmount) : null, origCurrency: e.origCurrency||null,
     paidBy: e.paidBy||null, splitWith: Array.isArray(e.splitWith) ? e.splitWith : [],
   }));
   tripData.bookings = (tripData.bookings||[]).map(b=>({
@@ -1305,6 +1339,34 @@ function packingProgress(d){
   (d.packingLists||[]).forEach(list=>{ total+=list.items.length; done+=list.items.filter(i=>i.done).length; });
   return {total, done, pct: total? Math.round(done/total*100) : null};
 }
+function getUpcomingFlightCheckins(){
+  const d = state.currentData;
+  const now = new Date();
+  const results = [];
+  (d.bookings||[]).forEach(b=>{
+    if(b.category!=='voo' || !b.dateFrom) return;
+    const timePart = b.timeFrom || '00:00';
+    const depDate = new Date(`${b.dateFrom}T${timePart}:00`);
+    if(isNaN(depDate)) return;
+    const hoursUntil = (depDate-now)/3600000;
+    if(hoursUntil>0 && hoursUntil<=48) results.push({booking:b, hoursUntil});
+  });
+  return results.sort((a,b)=>a.hoursUntil-b.hoursUntil);
+}
+function renderFlightCheckinCard(flights){
+  if(!flights.length) return '';
+  return flights.map(({booking:b, hoursUntil})=>{
+    let h = Math.floor(hoursUntil), m = Math.round((hoursUntil-h)*60);
+    if(m===60){ h+=1; m=0; }
+    const already = hoursUntil<=24;
+    return `<div class="hero-progress" style="margin-top:18px; padding:14px 20px; border-color:var(--gold);">
+      <div class="desc">
+        <h3 style="font-size:15px;">✈️ ${already?'Check-in pode já estar aberto':'Check-in abre em breve'} — ${escapeHtml(b.provider||'Voo')}${b.flightNumber?' · '+escapeHtml(b.flightNumber):''}</h3>
+        <p>Parte ${fmtDateShort(b.dateFrom)}${b.timeFrom?' às '+escapeHtml(b.timeFrom):''} — daqui a ${h}h${m?' '+m+'min':''}. ${already?'A maioria das companhias abre o check-in online 24h antes — confirma na app/site da companhia.':'Muitas companhias abrem check-in 24-48h antes; verifica a política desta.'}</p>
+      </div>
+    </div>`;
+  }).join('');
+}
 function renderToday(el){
   const d=state.currentData, info=d.info, today=todayLocalISO();
   const phase = tripPhase(info, today);
@@ -1326,6 +1388,7 @@ function renderToday(el){
           <p>${info.startDate?fmtDateShort(info.startDate):''}${info.endDate?' → '+fmtDateShort(info.endDate):''}${bookingSpend>0.005?` · já tens ${fmtMoney(bookingSpend, info.currency)} comprometidos em reservas${totalBudget>0?` (${Math.round(bookingSpend/totalBudget*100)}% do orçamento)`:''}.`:'.'}</p>
         </div>
       </div>
+      ${renderFlightCheckinCard(getUpcomingFlightCheckins())}
       <div class="quick-grid">
         <div class="quick-card"><div class="kicker">Tarefas por fazer</div><div class="big">${urgent.length}</div></div>
         <div class="quick-card"><div class="kicker">Já gasto/comprometido</div><div class="big">${fmtMoney(totalSpent, info.currency)}</div></div>
@@ -1355,6 +1418,7 @@ function renderToday(el){
     const remaining = totalBudget - totalSpent;
     el.innerHTML=`
       <div class="flex-head"><div><h2 class="section-title" style="margin-bottom:4px">Hoje · Dia ${dayNum} de ${totalDays}</h2><div style="color:var(--text-dim);font-size:13px">${fmtDateShort(today)} — o que precisas de saber hoje.</div></div><button class="btn btn-primary" onclick="openLocationModal('create')">+ Guardar local</button></div>
+      ${renderFlightCheckinCard(getUpcomingFlightCheckins())}
       <div class="quick-grid" style="margin-top:20px">
         <div class="quick-card"><div class="kicker">Compromissos hoje</div><div class="big">${todayAgenda.length}</div></div>
         <div class="quick-card"><div class="kicker">Gasto hoje</div><div class="big">${fmtMoney(spentToday, info.currency)}</div></div>
@@ -2440,7 +2504,7 @@ function renderTicket(e){
       <div class="cat-chip" style="background:${c.color}22; border:1px solid ${c.color}55;">${c.icon}</div>
       <div class="info">
         <div class="desc">${escapeHtml(e.description || c.label)}</div>
-        <div class="meta">${e.date ? fmtDateShort(e.date) : 'Sem data'}${e.time ? ' · '+escapeHtml(e.time) : ''} · ${c.label}${loc ? ' · '+escapeHtml(loc.name) : ''}${booking ? ' · '+escapeHtml(booking.provider||'Reserva') : ''}${paymentMeta}</div>
+        <div class="meta">${e.date ? fmtDateShort(e.date) : 'Sem data'}${e.time ? ' · '+escapeHtml(e.time) : ''} · ${c.label}${loc ? ' · '+escapeHtml(loc.name) : ''}${booking ? ' · '+escapeHtml(booking.provider||'Reserva') : ''}${paymentMeta}${e.origCurrency && e.origCurrency!==state.currentData.info.currency ? ` · pago em ${fmtMoney(e.origAmount, e.origCurrency)}` : ''}</div>
       </div>
       <div class="amount">${fmtMoney(e.amount, state.currentData.info.currency)}</div>
       <div class="actions">
@@ -3146,7 +3210,13 @@ function openExpenseModal(mode, id){
     <p style="font-size:12px; color:var(--text-dim); margin:-6px 0 14px; line-height:1.5;">Deixa em branco se a despesa não pertencer a um dia específico — por exemplo voos ou outras compras agregadas. Aparece como "sem data" nas estatísticas, mas continua a contar para o orçamento.</p>
     <div class="field"><label>Descrição</label><input id="e_desc" value="${escapeHtml(exp.description||'')}" placeholder="Ex: Jantar em Shibuya"></div>
     <div class="field-row">
-      <div class="field"><label>Valor (${state.currentData.info.currency})</label><input type="number" min="0" step="0.01" id="e_amount" value="${exp.amount}"></div>
+      <div class="field"><label>Valor</label>
+        <div style="display:flex; gap:6px;">
+          <input type="number" min="0" step="0.01" id="e_amount" value="${exp.origAmount!=null?exp.origAmount:exp.amount}" style="flex:1; min-width:0;">
+          <select id="e_curr" style="width:90px; flex-shrink:0;">${EXPENSE_CURRENCIES.map(c=>`<option value="${c}" ${(exp.origCurrency||state.currentData.info.currency)===c?'selected':''}>${c}</option>`).join('')}</select>
+        </div>
+        <div id="e_convert_hint" style="font-size:11px; color:var(--text-dim); margin-top:3px; min-height:14px;"></div>
+      </div>
       <div class="field"><label>Local associado</label>
         <select id="e_loc"><option value="">— nenhum —</option>${locs.map(l=>`<option value="${l.id}" ${exp.locationId===l.id?'selected':''}>${escapeHtml(l.name)}</option>`).join('')}</select>
       </div>
@@ -3187,9 +3257,34 @@ function openExpenseModal(mode, id){
     const suggested = BOOKING_TO_EXPENSE_CATEGORY[booking.category];
     if(suggested) document.getElementById('e_cat').value = suggested;
   });
-  document.getElementById('saveExpBtn').addEventListener('click', ()=>{
-    const amount = Number(document.getElementById('e_amount').value);
-    if(!amount || amount<=0){ alert('Indica um valor válido.'); return; }
+  let convertTimer = null;
+  function scheduleConversionHint(){
+    clearTimeout(convertTimer);
+    convertTimer = setTimeout(updateExpenseConversionHint, 300);
+  }
+  document.getElementById('e_amount').addEventListener('input', scheduleConversionHint);
+  document.getElementById('e_curr').addEventListener('change', scheduleConversionHint);
+  updateExpenseConversionHint();
+  document.getElementById('saveExpBtn').addEventListener('click', async ()=>{
+    const rawAmount = Number(document.getElementById('e_amount').value);
+    if(!rawAmount || rawAmount<=0){ alert('Indica um valor válido.'); return; }
+    const tripCurrency = state.currentData.info.currency;
+    const selectedCurrency = document.getElementById('e_curr').value;
+    let amount = rawAmount, origAmount = null, origCurrency = null;
+    if(selectedCurrency !== tripCurrency){
+      const saveBtn = document.getElementById('saveExpBtn');
+      saveBtn.disabled = true; saveBtn.textContent = 'A converter…';
+      try{
+        const rate = await getExchangeRate(selectedCurrency, tripCurrency);
+        amount = round2(rawAmount*rate);
+        origAmount = rawAmount; origCurrency = selectedCurrency;
+      }catch(e){
+        saveBtn.disabled = false; saveBtn.textContent = editing?'Guardar':'Adicionar';
+        alert(`Não foi possível converter ${selectedCurrency} para ${tripCurrency} agora (sem internet?). Muda a moeda para ${tripCurrency} ou tenta novamente.`);
+        return;
+      }
+      saveBtn.disabled = false; saveBtn.textContent = editing?'Guardar':'Adicionar';
+    }
     const paidByEl = document.getElementById('e_paidby');
     const splitEls = document.querySelectorAll('.e_split:checked');
     const payload = {
@@ -3197,7 +3292,7 @@ function openExpenseModal(mode, id){
       time: document.getElementById('e_time').value,
       categoryKey: document.getElementById('e_cat').value,
       description: document.getElementById('e_desc').value.trim(),
-      amount,
+      amount, origAmount, origCurrency,
       locationId: document.getElementById('e_loc').value || null,
       bookingId: document.getElementById('e_booking').value || null,
       paidBy: paidByEl ? (paidByEl.value || null) : null,
