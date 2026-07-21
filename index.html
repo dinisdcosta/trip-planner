@@ -341,7 +341,9 @@ select:focus, input:focus, textarea:focus{outline:2px solid var(--gold); outline
     <div class="trip-picker">
       <select id="tripSelect" aria-label="Escolher viagem"></select>
       <button class="btn" id="editTripBtn" title="Editar viagem">Editar</button>
+      <button class="btn" id="duplicateTripBtn" title="Duplicar esta viagem (categorias, listas da mala e tarefas) para começar uma nova">⧉ Duplicar</button>
       <button class="btn btn-primary" id="newTripBtn">+ Nova viagem</button>
+      <button class="btn" id="searchBtn" title="Pesquisar em toda a viagem">🔎 Pesquisar</button>
       <button class="btn" id="exportBtn" title="Descarregar um ficheiro de cópia de segurança desta viagem">⬇ Exportar</button>
       <button class="btn" id="importBtn" title="Carregar um ficheiro exportado anteriormente">⬆ Importar</button>
       <button class="btn" id="syncSettingsBtn" title="Definições de sincronização">🔗 Sincronizar</button>
@@ -863,6 +865,8 @@ function bindGlobalEvents(){
   GLOBAL_EVENTS_BOUND = true;
   document.getElementById('newTripBtn').addEventListener('click', ()=>openTripModal('create'));
   document.getElementById('editTripBtn').addEventListener('click', ()=>openTripModal('edit'));
+  document.getElementById('duplicateTripBtn').addEventListener('click', duplicateTrip);
+  document.getElementById('searchBtn').addEventListener('click', openSearchModal);
   document.getElementById('tripSelect').addEventListener('change', async (e)=>{
     state.currentTripId = e.target.value;
     state.currentData = ensureShape(await getTripData(state.currentTripId));
@@ -1098,17 +1102,23 @@ function renderHeader(){
   const sel = document.getElementById('tripSelect');
   const editBtn = document.getElementById('editTripBtn');
   const exportBtn = document.getElementById('exportBtn');
+  const duplicateBtn = document.getElementById('duplicateTripBtn');
+  const searchBtn = document.getElementById('searchBtn');
   if(!state.trips.length){
     document.getElementById('tripTitle').textContent = 'A tua primeira viagem';
     sel.innerHTML = '';
     sel.style.display = 'none';
     editBtn.style.display = 'none';
     exportBtn.style.display = 'none';
+    duplicateBtn.style.display = 'none';
+    searchBtn.style.display = 'none';
     return;
   }
   sel.style.display = '';
   editBtn.style.display = '';
   exportBtn.style.display = '';
+  duplicateBtn.style.display = '';
+  searchBtn.style.display = '';
   sel.innerHTML = state.trips.map(t=>`<option value="${t.id}" ${t.id===state.currentTripId?'selected':''}>${escapeHtml(t.name)}</option>`).join('');
   const cur = state.trips.find(t=>t.id===state.currentTripId);
   document.getElementById('tripTitle').textContent = cur ? cur.name : 'Diário de Viagem';
@@ -1665,7 +1675,7 @@ function renderRoteiro(el){
   } else {
     el.innerHTML = `
       <div class="flex-head"><div><h2 class="section-title" style="margin-bottom:4px">Roteiro &amp; percurso</h2><div class="check-meta">Reservas, transportes, alojamentos e locais aparecem juntos por data e hora. A hora é sempre opcional.</div></div><div style="display:flex;gap:8px"><button class="btn btn-sm" onclick="openBookingModal('create')">+ Reserva</button><button class="btn btn-sm btn-primary" onclick="openLocationModal('create')">+ Local</button></div></div>
-      <div class="itin-layout" style="margin-top:18px"><div><div id="itinList">${listHtml}</div></div><div><div id="mapCanvas" class="map-canvas"></div><div class="map-legend-swatches">${mapLegendSwatches()}</div><div class="map-legend">Passa o rato num pin para o identificar, clica para detalhes e para editar, ou arrasta para afinar a posição — a morada atualiza-se sozinha.</div><div class="map-credit">Mapa: © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors</div></div></div>`;
+      <div class="itin-layout" style="margin-top:18px"><div><div id="itinList">${listHtml}</div></div><div><div id="mapCanvas" class="map-canvas"></div><div class="map-legend-swatches">${mapLegendSwatches()}</div><div class="map-legend">Passa o rato num pin para o identificar, clica para detalhes e para editar, ou arrasta para afinar a posição — a morada atualiza-se sozinha. O botão 📥 guarda esta zona do mapa para veres offline.</div><div class="map-credit">Mapa: © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors</div></div></div>`;
   }
   renderMapCanvas();
   const pinned = state.currentData.locations.filter(l=>l.lat!=null && l.lon!=null);
@@ -1729,6 +1739,110 @@ function buildPinDivIcon(loc, index){
     </div>`;
   return L.divIcon({ className:'map-pin', html, iconSize:[26,26], iconAnchor:[13,26] });
 }
+/* ---------- Mapa offline: cache de tiles ---------- */
+const TILE_URL_TEMPLATE = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+const TILE_CACHE_NAME = 'trip-map-tiles-v1';
+const TILE_SUBDOMAINS = ['a','b','c'];
+function tileCacheSupported(){ return typeof window!=='undefined' && 'caches' in window; }
+async function fetchTileWithCache(url, imgEl){
+  if(tileCacheSupported()){
+    try{
+      const cache = await caches.open(TILE_CACHE_NAME);
+      const cached = await cache.match(url);
+      if(cached){
+        imgEl.src = URL.createObjectURL(await cached.blob());
+        return true;
+      }
+    }catch(e){ /* Cache API indisponível ou falhou — segue para a rede */ }
+  }
+  const res = await fetch(url);
+  if(!res.ok) throw new Error('tile '+res.status);
+  const blob = await res.blob();
+  imgEl.src = URL.createObjectURL(blob);
+  if(tileCacheSupported()){
+    caches.open(TILE_CACHE_NAME).then(c=>c.put(url, new Response(blob, {headers:{'Content-Type':blob.type||'image/png'}}))).catch(()=>{});
+  }
+  return false;
+}
+const OfflineTileLayer = (typeof L!=='undefined') ? L.TileLayer.extend({
+  createTile: function(coords, done){
+    const tile = document.createElement('img');
+    tile.alt = '';
+    const url = this.getTileUrl(coords);
+    fetchTileWithCache(url, tile).then(()=>done(null, tile)).catch(err=>done(err, tile));
+    return tile;
+  }
+}) : null;
+function offlineTileLayer(options){
+  return new OfflineTileLayer(TILE_URL_TEMPLATE, {subdomains:TILE_SUBDOMAINS, maxZoom:19, ...options});
+}
+function tileXY(lat, lon, zoom){
+  const n = Math.pow(2, zoom);
+  const x = Math.floor((lon+180)/360*n);
+  const latRad = lat*Math.PI/180;
+  const y = Math.floor((1-Math.log(Math.tan(latRad)+1/Math.cos(latRad))/Math.PI)/2*n);
+  return {x, y};
+}
+async function downloadMapArea(btn){
+  if(!leafletMapInstance) return;
+  if(!tileCacheSupported()){ alert('O teu browser não suporta guardar o mapa offline.'); return; }
+  const bounds = leafletMapInstance.getBounds();
+  const baseZoom = leafletMapInstance.getZoom();
+  const minZoom = Math.max(2, baseZoom-1);
+  const maxZoom = Math.min(18, baseZoom+3);
+  const tiles = [];
+  for(let z=minZoom; z<=maxZoom; z++){
+    const nw = tileXY(bounds.getNorth(), bounds.getWest(), z);
+    const se = tileXY(bounds.getSouth(), bounds.getEast(), z);
+    for(let x=Math.min(nw.x,se.x); x<=Math.max(nw.x,se.x); x++){
+      for(let y=Math.min(nw.y,se.y); y<=Math.max(nw.y,se.y); y++){
+        tiles.push({x,y,z});
+        if(tiles.length>400) break;
+      }
+      if(tiles.length>400) break;
+    }
+    if(tiles.length>400) break;
+  }
+  const originalText = btn.innerHTML;
+  btn.disabled = true;
+  let done=0, failed=0;
+  const cache = await caches.open(TILE_CACHE_NAME);
+  const CONCURRENCY = 6;
+  let idx = 0;
+  async function worker(){
+    while(idx<tiles.length){
+      const t = tiles[idx++];
+      const sub = TILE_SUBDOMAINS[(t.x+t.y)%TILE_SUBDOMAINS.length];
+      const url = TILE_URL_TEMPLATE.replace('{s}',sub).replace('{z}',t.z).replace('{x}',t.x).replace('{y}',t.y);
+      try{
+        const already = await cache.match(url);
+        if(!already){
+          const res = await fetch(url);
+          if(res.ok) await cache.put(url, res.clone());
+          else failed++;
+        }
+      }catch(e){ failed++; }
+      done++;
+      btn.innerHTML = `⏳ ${done}/${tiles.length}`;
+    }
+  }
+  await Promise.all(Array.from({length:CONCURRENCY}, worker));
+  btn.disabled = false;
+  btn.innerHTML = failed ? `⚠️ ${tiles.length-failed}/${tiles.length}` : '✓ Guardado';
+  setTimeout(()=>{ btn.innerHTML = originalText; }, 2500);
+}
+const MapDownloadControl = (typeof L!=='undefined') ? L.Control.extend({
+  options:{position:'bottomright'},
+  onAdd:function(){
+    const btn = L.DomUtil.create('button', 'leaflet-bar map-zoom-btn map-fit-btn');
+    btn.type='button'; btn.title='Guardar esta zona do mapa para offline (zoom atual e alguns níveis a mais)';
+    btn.innerHTML='📥';
+    btn.style.marginTop='6px';
+    L.DomEvent.disableClickPropagation(btn);
+    L.DomEvent.on(btn,'click', ()=>downloadMapArea(btn));
+    return btn;
+  }
+}) : null;
 const MapFitControl = (typeof L!=='undefined') ? L.Control.extend({
   options:{position:'bottomright'},
   onAdd:function(){
@@ -1754,11 +1868,12 @@ function renderMapCanvas(){
     leafletMarkers = new Map();
     leafletRouteLine = null;
     leafletMapInstance = L.map(wrap, { attributionControl:true, minZoom:2, maxZoom:19, zoomControl:false }).setView([20,0], 2);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom:19, attribution:'&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>'
+    offlineTileLayer({
+      attribution:'&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>'
     }).addTo(leafletMapInstance);
     L.control.zoom({position:'bottomright'}).addTo(leafletMapInstance);
     if(MapFitControl) leafletMapInstance.addControl(new MapFitControl());
+    if(MapDownloadControl) leafletMapInstance.addControl(new MapDownloadControl());
   }
 
   const currentIds = new Set(locs.map(l=>l.id));
@@ -2508,6 +2623,126 @@ function openTripModal(mode){
   });
 }
 
+async function duplicateTrip(){
+  if(!state.currentData) return;
+  const src = state.currentData;
+  const newId = uid();
+  const info = {
+    id: newId,
+    name: (src.info.name||'Viagem') + ' (cópia)',
+    destination: src.info.destination||'',
+    startDate: '', endDate: '',
+    currency: src.info.currency||'EUR',
+    budgetTotal: Number(src.info.budgetTotal)||0,
+  };
+  const data = blankTripData(info);
+  data.modules = {...src.modules};
+  data.budgetCategories = (src.budgetCategories||[]).map(c=>({...c}));
+  const idMap = new Map();
+  const newLists = (src.packingLists||[]).map(l=>{
+    const nid = uid();
+    idMap.set(l.id, nid);
+    return {...l, id:nid, items:(l.items||[]).map(i=>({...i, id:uid(), done:false}))};
+  });
+  newLists.forEach(l=>{ l.parentId = l.parentId ? (idMap.get(l.parentId)||null) : null; });
+  if(newLists.length) data.packingLists = newLists;
+  data.tasks = (src.tasks||[]).map(t=>({id:uid(), title:t.title, dueDate:'', owner:t.owner||'', done:false}));
+
+  state.trips.push(pickIndexFields(info));
+  await saveTripsIndex(state.trips);
+  await saveTripData(newId, data);
+  state.currentTripId = newId;
+  state.currentData = data;
+  schedulePush();
+  renderHeader();
+  renderTabs();
+  renderCurrentTab();
+  openTripModal('edit');
+}
+let currentSearchResults = [];
+function searchTripData(query){
+  const q = query.trim().toLowerCase();
+  if(!q || !state.currentData) return [];
+  const d = state.currentData;
+  const results = [];
+  d.locations.forEach(l=>{
+    const hay = [l.name, l.notes, l.address].filter(Boolean).join(' ').toLowerCase();
+    if(hay.includes(q)){
+      const v = locationPinVisual(l);
+      results.push({type:'location', id:l.id, title:l.name, meta:l.address||l.notes||v.label, icon:v.icon});
+    }
+  });
+  d.bookings.forEach(b=>{
+    const hay = [b.provider,b.code,b.flightNumber,b.notes].filter(Boolean).join(' ').toLowerCase();
+    if(hay.includes(q)){
+      const c = BOOKING_CATEGORIES.find(x=>x.key===b.category)||BOOKING_CATEGORIES[4];
+      results.push({type:'booking', id:b.id, title:b.provider||c.label, meta:[b.code,b.flightNumber].filter(Boolean).join(' · ')||c.label, icon:c.icon});
+    }
+  });
+  d.expenses.forEach(e=>{
+    if((e.description||'').toLowerCase().includes(q)){
+      const c = catInfo(e.categoryKey);
+      results.push({type:'expense', id:e.id, title:e.description||c.label, meta:`${fmtMoney(e.amount, d.info.currency)} · ${c.label}`, icon:c.icon});
+    }
+  });
+  d.tasks.forEach(t=>{
+    if((t.title||'').toLowerCase().includes(q)) results.push({type:'task', id:t.id, title:t.title, meta:t.done?'Concluída':'Pendente', icon:'✅'});
+  });
+  (d.packingLists||[]).forEach(list=>{
+    (list.items||[]).forEach(i=>{
+      if((i.name||'').toLowerCase().includes(q)) results.push({type:'packing', id:i.id, listId:list.id, title:i.name, meta:'Lista: '+list.name, icon:list.icon||'🎒'});
+    });
+  });
+  return results;
+}
+const SEARCH_GROUP_LABELS = {location:'Locais', booking:'Reservas', expense:'Despesas', task:'Tarefas', packing:'Mala'};
+const SEARCH_GROUP_ORDER = ['location','booking','expense','task','packing'];
+function openSearchModal(){
+  openModal(`
+    <h3>Pesquisar na viagem</h3>
+    <div class="field"><input id="searchInput" placeholder="Locais, reservas, despesas, tarefas, mala..." autocomplete="off"></div>
+    <div id="searchResults"></div>
+    <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">Fechar</button></div>
+  `);
+  const input = document.getElementById('searchInput');
+  input.focus();
+  input.addEventListener('input', ()=>renderSearchResults(input.value));
+  renderSearchResults('');
+}
+function renderSearchResults(query){
+  const box = document.getElementById('searchResults');
+  if(!box) return;
+  if(!query.trim()){
+    currentSearchResults = [];
+    box.innerHTML = '<p style="color:var(--text-dim); font-size:13px; padding:10px 0;">Escreve para pesquisar em locais, reservas, despesas, tarefas e listas da mala desta viagem.</p>';
+    return;
+  }
+  const results = searchTripData(query);
+  currentSearchResults = results;
+  if(!results.length){
+    box.innerHTML = '<p style="color:var(--text-dim); font-size:13px; padding:10px 0;">Sem resultados para "'+escapeHtml(query)+'".</p>';
+    return;
+  }
+  box.innerHTML = SEARCH_GROUP_ORDER.filter(t=>results.some(r=>r.type===t)).map(t=>`
+    <div style="margin-bottom:10px;">
+      <div class="check-meta" style="text-transform:uppercase; font-size:10.5px; margin-bottom:4px;">${SEARCH_GROUP_LABELS[t]}</div>
+      ${results.map((r,i)=>({r,i})).filter(x=>x.r.type===t).map(({r,i})=>`
+        <div class="check-row" style="cursor:pointer;" onclick="goToSearchResult(${i})">
+          <div style="font-size:18px; flex-shrink:0;">${escapeHtml(r.icon||'📌')}</div>
+          <div class="check-main"><div class="check-title">${escapeHtml(r.title||'')}</div><div class="check-meta">${escapeHtml(r.meta||'')}</div></div>
+        </div>`).join('')}
+    </div>
+  `).join('');
+}
+function goToSearchResult(i){
+  const r = currentSearchResults[i];
+  if(!r) return;
+  closeModal();
+  if(r.type==='location'){ state.activeTab='roteiro'; renderTabs(); renderCurrentTab(); setTimeout(()=>openLocationModal('edit', r.id), 60); }
+  else if(r.type==='booking'){ state.activeTab='reservas'; renderTabs(); renderCurrentTab(); setTimeout(()=>openBookingModal('edit', r.id), 60); }
+  else if(r.type==='expense'){ state.activeTab='despesas'; renderTabs(); renderCurrentTab(); setTimeout(()=>openExpenseModal('edit', r.id), 60); }
+  else if(r.type==='task' || r.type==='packing'){ state.activeTab='preparacao'; renderTabs(); renderCurrentTab(); }
+}
 async function deleteCurrentTrip(){
   if(!confirm('Eliminar esta viagem e todos os seus dados? Esta ação não pode ser desfeita.')) return;
   const id = state.currentTripId;
@@ -2586,7 +2821,7 @@ function initMiniMap(){
   miniMapMarker = null;
   const start = state.modalPendingLatLon || {lat:20, lon:0};
   miniMapInstance = L.map(el, {attributionControl:false, minZoom:2, maxZoom:19}).setView([start.lat, start.lon], state.modalPendingLatLon?15:2);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(miniMapInstance);
+  offlineTileLayer().addTo(miniMapInstance);
   if(state.modalPendingLatLon) placeMiniMapMarker(state.modalPendingLatLon.lat, state.modalPendingLatLon.lon, {reverseGeocode:false});
   miniMapInstance.on('click', e=>placeMiniMapMarker(e.latlng.lat, e.latlng.lng, {reverseGeocode:true}));
   setTimeout(()=>{ if(miniMapInstance) miniMapInstance.invalidateSize(); }, 0);
