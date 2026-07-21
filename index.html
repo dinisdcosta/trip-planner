@@ -1214,6 +1214,65 @@ function updateNetworkStatus(){
   el.classList.toggle('offline',!online);
   el.textContent=online?'Disponível offline · ligação ativa':'Modo offline · alterações guardadas neste dispositivo';
 }
+/* ---------- Meteorologia (Open-Meteo — gratuito, sem chave) ---------- */
+const WMO_WEATHER = {
+  0:{icon:'☀️',label:'Céu limpo'}, 1:{icon:'🌤️',label:'Poucas nuvens'}, 2:{icon:'⛅',label:'Parcialmente nublado'}, 3:{icon:'☁️',label:'Nublado'},
+  45:{icon:'🌫️',label:'Nevoeiro'}, 48:{icon:'🌫️',label:'Nevoeiro gelado'},
+  51:{icon:'🌦️',label:'Chuvisco fraco'}, 53:{icon:'🌦️',label:'Chuvisco'}, 55:{icon:'🌦️',label:'Chuvisco forte'},
+  56:{icon:'🌧️',label:'Chuvisco gelado'}, 57:{icon:'🌧️',label:'Chuvisco gelado forte'},
+  61:{icon:'🌧️',label:'Chuva fraca'}, 63:{icon:'🌧️',label:'Chuva'}, 65:{icon:'🌧️',label:'Chuva forte'},
+  66:{icon:'🌧️',label:'Chuva gelada'}, 67:{icon:'🌧️',label:'Chuva gelada forte'},
+  71:{icon:'🌨️',label:'Neve fraca'}, 73:{icon:'🌨️',label:'Neve'}, 75:{icon:'❄️',label:'Neve forte'}, 77:{icon:'❄️',label:'Grãos de neve'},
+  80:{icon:'🌦️',label:'Aguaceiros fracos'}, 81:{icon:'🌦️',label:'Aguaceiros'}, 82:{icon:'⛈️',label:'Aguaceiros fortes'},
+  85:{icon:'🌨️',label:'Aguaceiros de neve'}, 86:{icon:'🌨️',label:'Aguaceiros de neve fortes'},
+  95:{icon:'⛈️',label:'Trovoada'}, 96:{icon:'⛈️',label:'Trovoada com granizo'}, 99:{icon:'⛈️',label:'Trovoada forte com granizo'},
+};
+async function getDestinationCoords(){
+  const info = state.currentData.info;
+  if(!info.destination) return null;
+  if(info.destLat!=null && info.destLon!=null && info.destGeocodedFor===info.destination){
+    return {lat:info.destLat, lon:info.destLon};
+  }
+  try{
+    const res = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(info.destination)}`, {headers:{'Accept-Language':'pt-PT,pt;q=0.9,en;q=0.7'}});
+    if(!res.ok) return null;
+    const rows = await res.json();
+    if(!rows.length) return null;
+    info.destLat = Number(rows[0].lat); info.destLon = Number(rows[0].lon); info.destGeocodedFor = info.destination;
+    persistCurrentTrip();
+    return {lat:info.destLat, lon:info.destLon};
+  }catch(e){ return null; }
+}
+let weatherCache = null;
+async function fetchWeatherForecast(lat, lon){
+  const key = `${lat.toFixed(2)},${lon.toFixed(2)}`;
+  if(weatherCache && weatherCache.key===key && (Date.now()-weatherCache.fetchedAt)<3600000){
+    return weatherCache.data;
+  }
+  const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=weathercode,temperature_2m_max,temperature_2m_min&timezone=auto&forecast_days=16`);
+  if(!res.ok) throw new Error('weather fetch failed');
+  const json = await res.json();
+  const daily = json.daily || {};
+  const days = (daily.time||[]).map((date,i)=>({date, code:daily.weathercode[i], max:daily.temperature_2m_max[i], min:daily.temperature_2m_min[i]}));
+  weatherCache = {key, fetchedAt:Date.now(), data:days};
+  return days;
+}
+async function loadAndRenderWeather(targetDate, label){
+  const box = document.getElementById('weatherBox');
+  if(!box) return;
+  try{
+    const coords = await getDestinationCoords();
+    if(!coords) return;
+    const days = await fetchWeatherForecast(coords.lat, coords.lon);
+    const day = days.find(x=>x.date===targetDate);
+    if(!day) return; // fora do alcance da previsão (só cobre ~16 dias)
+    const w = WMO_WEATHER[day.code] || {icon:'🌡️', label:''};
+    const boxNow = document.getElementById('weatherBox');
+    if(!boxNow) return;
+    boxNow.innerHTML = `<div class="kicker">${escapeHtml(label)}</div><div class="big">${w.icon} ${Math.round(day.max)}° / ${Math.round(day.min)}°</div><div class="check-meta" style="margin-top:2px;">${escapeHtml(w.label)}</div>`;
+    boxNow.style.display = '';
+  }catch(e){ /* offline ou API indisponível — o cartão fica escondido, sem quebrar a página */ }
+}
 function tripPhase(info, today){
   if(!info.startDate || !info.endDate) return 'unknown';
   if(today < info.startDate) return 'upcoming';
@@ -1271,6 +1330,7 @@ function renderToday(el){
         <div class="quick-card"><div class="kicker">Tarefas por fazer</div><div class="big">${urgent.length}</div></div>
         <div class="quick-card"><div class="kicker">Já gasto/comprometido</div><div class="big">${fmtMoney(totalSpent, info.currency)}</div></div>
         <div class="quick-card"><div class="kicker">Mala preparada</div><div class="big">${pack.pct!=null?pack.pct+'%':'—'}</div></div>
+        <div class="quick-card" id="weatherBox" style="display:none;"></div>
       </div>
       <div class="chart-row">
         <div class="list-card"><div class="flex-head"><h3 class="section-title">Falta tratar</h3><button class="btn btn-sm" onclick="openTaskModal()">+ Tarefa</button></div>${renderTaskRows(urgent)}</div>
@@ -1279,6 +1339,7 @@ function renderToday(el){
       <div class="list-card" id="packingListsRoot" style="margin-top:18px"><div class="flex-head"><h3 class="section-title">Listas da mala</h3><button class="btn btn-sm" onclick="openPackingListModal('create')">+ Lista</button></div>${d.packingLists.filter(l=>!l.parentId).map(l=>renderPackingList(l,0)).join('')}</div>
       <div class="list-card" style="margin-top:18px"><div class="flex-head"><h3 class="section-title">Ideias e locais por visitar</h3><button class="btn btn-sm" onclick="state.activeTab='roteiro';renderTabs();renderCurrentTab()">Ver todos</button></div>${ideas.length?ideas.map(renderInterestRow).join(''):'<div class="check-meta">Adiciona locais sem data para teres uma lista flexível de ideias.</div>'}</div>`;
     bindPackingDragHandles();
+    loadAndRenderWeather(info.startDate, 'Previsão p/ chegada');
     return;
   }
 
@@ -1299,6 +1360,7 @@ function renderToday(el){
         <div class="quick-card"><div class="kicker">Gasto hoje</div><div class="big">${fmtMoney(spentToday, info.currency)}</div></div>
         <div class="quick-card"><div class="kicker">Falta tratar</div><div class="big">${urgent.length}</div></div>
         <div class="quick-card"><div class="kicker">Orçamento restante</div><div class="big ${remaining<0?'over':''}" style="${remaining<0?'color:var(--coral)':''}">${totalBudget>0?fmtMoney(remaining, info.currency):'—'}</div></div>
+        <div class="quick-card" id="weatherBox" style="display:none;"></div>
       </div>
       <div class="chart-row">
         <div class="list-card"><div class="flex-head"><h3 class="section-title">Agenda de hoje</h3><button class="btn btn-sm" onclick="state.activeTab='roteiro';renderTabs();renderCurrentTab()">Ver roteiro</button></div>${todayAgenda.length?todayAgenda.map(renderAgendaRow).join(''):'<div class="check-meta">Nada marcado para hoje — dia livre.</div>'}</div>
@@ -1306,6 +1368,7 @@ function renderToday(el){
       </div>
       <div class="list-card" style="margin-top:18px"><div class="flex-head"><h3 class="section-title">Amanhã</h3></div>${tomorrowAgenda.length?tomorrowAgenda.map(renderAgendaRow).join(''):'<div class="check-meta">Nada marcado para amanhã ainda.</div>'}</div>
       <div class="list-card" style="margin-top:18px"><div class="flex-head"><h3 class="section-title">Ideias e locais por visitar</h3><button class="btn btn-sm" onclick="state.activeTab='roteiro';renderTabs();renderCurrentTab()">Ver todos</button></div>${ideas.length?ideas.map(renderInterestRow).join(''):'<div class="check-meta">Adiciona locais sem data para teres uma lista flexível de ideias.</div>'}</div>`;
+    loadAndRenderWeather(today, 'Tempo hoje');
     return;
   }
 
