@@ -1003,6 +1003,39 @@ function exportTripData(){
   }
 }
 
+function csvEscape(val){
+  const s = String(val==null?'':val);
+  return /[",\r\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
+}
+function exportExpensesCSV(){
+  if(!state.currentData || !state.currentData.expenses.length){ alert('Ainda não tens despesas para exportar.'); return; }
+  const d = state.currentData;
+  const rows = [['Data','Hora','Categoria','Descrição','Valor','Moeda','Local','Reserva','Pago por']];
+  const sorted = [...d.expenses].sort((a,b)=>(a.date||'').localeCompare(b.date||'') || (a.time||'').localeCompare(b.time||''));
+  sorted.forEach(e=>{
+    const c = catInfo(e.categoryKey);
+    const loc = d.locations.find(l=>l.id===e.locationId);
+    const booking = (d.bookings||[]).find(b=>b.id===e.bookingId);
+    const payer = e.paidBy ? personName(e.paidBy) : '';
+    rows.push([e.date||'', e.time||'', c.label, e.description||'', Number(e.amount||0).toFixed(2), d.info.currency, loc?loc.name:'', booking?(booking.provider||''):'', payer||'']);
+  });
+  const csv = rows.map(r=>r.map(csvEscape).join(',')).join('\r\n');
+  try{
+    const blob = new Blob(['﻿'+csv], {type:'text/csv;charset=utf-8;'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const safeName = (d.info.name||'viagem').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'');
+    a.href = url;
+    a.download = `despesas-${safeName || 'viagem'}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }catch(e){
+    console.error(e);
+    alert('Não foi possível criar o ficheiro CSV neste ambiente.');
+  }
+}
 function normalizeImportedTrip(tripData){
   if(!tripData.info.id) tripData.info.id = uid();
   if(!tripData.info.currency) tripData.info.currency = 'EUR';
@@ -1498,6 +1531,34 @@ function togglePackingItem(listId,id){const i=state.currentData.packingLists.fin
 function deletePackingItem(listId,id){const l=state.currentData.packingLists.find(x=>x.id===listId);if(l){markDeleted('packingItems', id);l.items=l.items.filter(x=>x.id!==id);persistCurrentTrip();renderCurrentTab();}}
 
 /* ============================= DASHBOARD ============================= */
+function computeBudgetPace(){
+  const d = state.currentData, info = d.info;
+  const today = todayLocalISO();
+  const phase = tripPhase(info, today);
+  if(phase!=='active' && phase!=='past') return null;
+  const totalDays = daysBetween(info.startDate, info.endDate);
+  if(!totalDays) return null;
+  const elapsedDays = phase==='past' ? totalDays : Math.min(totalDays, daysUntil(today, info.startDate)+1);
+  const fixedSpend = d.expenses.filter(e=>e.bookingId).reduce((s,e)=>s+Number(e.amount||0),0);
+  const discretionarySpend = d.expenses.filter(e=>!e.bookingId).reduce((s,e)=>s+Number(e.amount||0),0);
+  const dailyRate = discretionarySpend / Math.max(1, elapsedDays);
+  const projectedTotal = fixedSpend + dailyRate*totalDays;
+  const totalBudget = Number(info.budgetTotal||0);
+  const diffPct = totalBudget>0 ? Math.round((projectedTotal/totalBudget-1)*100) : null;
+  return {totalDays, elapsedDays, fixedSpend, discretionarySpend, dailyRate, projectedTotal, totalBudget, diffPct, phase};
+}
+function renderBudgetPaceCard(pace, currency){
+  if(!pace || pace.discretionarySpend<=0) return '';
+  const label = pace.diffPct==null ? '' : (pace.diffPct>0 ? `${pace.diffPct}% acima do orçamento` : `${Math.abs(pace.diffPct)}% abaixo do orçamento`);
+  const color = pace.diffPct==null ? 'var(--text)' : (pace.diffPct>0 ? 'var(--coral)' : 'var(--sage)');
+  return `
+    <div class="hero-progress" style="margin-top:18px; padding:16px 22px;">
+      <div class="desc">
+        <h3 style="font-size:16px;">📈 ${pace.phase==='past'?'Terminaste a gastar':'Ao ritmo atual, deves terminar a gastar'} ${fmtMoney(pace.projectedTotal, currency)}${label?` <span style="color:${color}">(${label})</span>`:''}</h3>
+        <p>Baseado em ${fmtMoney(pace.dailyRate, currency)}/dia de despesas do dia-a-dia (sem contar reservas já pagas), ao longo de ${pace.elapsedDays} de ${pace.totalDays} dia(s)${pace.fixedSpend>0.005 ? `, mais ${fmtMoney(pace.fixedSpend, currency)} já comprometidos em reservas` : ''}.</p>
+      </div>
+    </div>`;
+}
 function renderDashboard(el){
   const info = state.currentData.info;
   const expenses = state.currentData.expenses;
@@ -1506,6 +1567,10 @@ function renderDashboard(el){
   const remaining = totalBudget - totalSpent;
   const pct = totalBudget>0 ? Math.min(100, Math.round((totalSpent/totalBudget)*100)) : 0;
   const days = daysBetween(info.startDate, info.endDate);
+  const numPeople = (state.currentData.people||[]).length;
+  const perDay = days ? totalSpent/days : null;
+  const perPersonPerDay = (days && numPeople>0) ? totalSpent/days/numPeople : null;
+  const pace = computeBudgetPace();
 
   el.innerHTML = `
     <h2 class="section-title">Resumo da viagem</h2>
@@ -1520,12 +1585,15 @@ function renderDashboard(el){
         ${remaining>=0 ? `Ainda tens ${fmtMoney(remaining, info.currency)} disponíveis.` : `Excedeste em ${fmtMoney(Math.abs(remaining), info.currency)}.`}</p>
       </div>
     </div>
+    ${renderBudgetPaceCard(pace, info.currency)}
 
-    <div class="stat-row">
+    <div class="stat-row" style="margin-top:18px;">
       <div class="stat-card"><div class="label">Orçamento total</div><div class="value">${fmtMoney(totalBudget, info.currency)}</div></div>
       <div class="stat-card"><div class="label">Gasto total</div><div class="value ${totalSpent>totalBudget && totalBudget>0?'over':''}">${fmtMoney(totalSpent, info.currency)}</div></div>
       <div class="stat-card"><div class="label">Restante</div><div class="value ${remaining<0?'over':'ok'}">${fmtMoney(remaining, info.currency)}</div></div>
       <div class="stat-card"><div class="label">Duração</div><div class="value">${days!=null ? days+' dias' : '—'}</div></div>
+      ${perDay!=null ? `<div class="stat-card"><div class="label">Gasto/dia</div><div class="value">${fmtMoney(perDay, info.currency)}</div></div>` : ''}
+      ${perPersonPerDay!=null ? `<div class="stat-card"><div class="label">Gasto/pessoa/dia</div><div class="value">${fmtMoney(perPersonPerDay, info.currency)}</div></div>` : ''}
     </div>
 
     <div class="chart-row">
@@ -2201,7 +2269,7 @@ async function searchBookingPlace(kind){
     box.querySelectorAll('button').forEach(btn=>btn.onclick=()=>chooseBookingPlace(kind, rows[Number(btn.dataset.i)], q));
   }catch(e){status.textContent='Não foi possível localizar automaticamente. O nome será guardado na mesma.';status.style.color='var(--coral)';box.innerHTML='';}
 }
-function toggleBookingFlightFields(){const flight=document.getElementById('b_cat')?.value==='voo';document.querySelectorAll('.flight-only').forEach(x=>x.style.display=flight?'flex':'none');const arr=document.getElementById('arrivalLocationField');if(arr)arr.style.display=flight?'flex':'none';}
+function toggleBookingFlightFields(){const cat=document.getElementById('b_cat')?.value;const flight=cat==='voo';const showArrival=cat==='voo'||cat==='transporte';document.querySelectorAll('.flight-only').forEach(x=>x.style.display=flight?'flex':'none');const arr=document.getElementById('arrivalLocationField');if(arr)arr.style.display=showArrival?'flex':'none';}
 function openBookingModal(mode,id,prefill=null){
  const editing=mode==='edit';const b=editing?state.currentData.bookings.find(x=>x.id===id):{category:'voo',provider:'',code:'',dateFrom:'',dateTo:'',timeFrom:'',timeTo:'',locationId:'',arrivalLocationId:'',flightNumber:'',flightStatus:'',departureTerminal:'',arrivalTerminal:'',notes:'',link:'',...(prefill||{})};
  openModal(`<div class="flex-head" style="margin-bottom:16px"><h3 style="margin:0">${editing?'Editar reserva':'Nova reserva'}</h3>${!editing?`<button type="button" class="btn btn-sm" id="importReservationBtn">Importar confirmação</button>`:''}</div><div class="field"><label>Tipo</label><select id="b_cat">${BOOKING_CATEGORIES.map(c=>`<option value="${c.key}" ${b.category===c.key?'selected':''}>${c.icon} ${c.label}</option>`).join('')}</select></div>
@@ -2278,7 +2346,10 @@ function renderDespesas(el){
           ${getCategories().map(c=>`<option value="${c.key}" ${filterKey===c.key?'selected':''}>${c.icon} ${c.label}</option>`).join('')}
         </select>
       </div>
-      <button class="btn btn-primary" onclick="openExpenseModal('create')">+ Adicionar despesa</button>
+      <div style="display:flex; gap:8px;">
+        ${allExpenses.length ? `<button class="btn btn-sm" onclick="exportExpensesCSV()" title="Exportar todas as despesas para Excel/Numbers/Sheets">⬇️ CSV</button>` : ''}
+        <button class="btn btn-primary" onclick="openExpenseModal('create')">+ Adicionar despesa</button>
+      </div>
     </div>
     <p style="font-family:var(--font-mono); font-size:12.5px; color:var(--text-dim); margin:-6px 0 16px;">${expenses.length} despesa(s) · total ${fmtMoney(total, info.currency)}</p>
     <div id="ticketList">
