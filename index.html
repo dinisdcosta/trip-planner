@@ -1582,23 +1582,53 @@ async function getUtcOffsetHours(lat, lon){
   tzOffsetCache[key] = {offset, fetchedAt:Date.now()};
   return offset;
 }
+function groupFlightLegs(){
+  // Uma viagem com escala aparece como várias reservas de voo separadas. Para o jetlag
+  // importa o percurso todo (1ª partida → chegada final), não cada perna isolada — senão
+  // uma escala curta e sem grande fuso "esconderia" o salto de fuso real do trajeto,
+  // ou o cálculo usaria o aeroporto de escala como se fosse o ponto de partida de casa.
+  const flights = (state.currentData.bookings||[])
+    .filter(b=>b.category==='voo' && b.dateFrom && b.locationId && b.arrivalLocationId)
+    .sort((a,b)=>bookingSortKey(a).localeCompare(bookingSortKey(b)));
+  const journeys = [];
+  let current = null;
+  for(const leg of flights){
+    const connects = current && current.lastLeg.arrivalLocationId===leg.locationId &&
+      Math.abs(daysUntil(leg.dateFrom, current.lastLeg.dateTo||current.lastLeg.dateFrom)) <= 2;
+    if(connects){
+      current.legs.push(leg);
+      current.lastLeg = leg;
+    } else {
+      current = {legs:[leg], firstLeg:leg, lastLeg:leg};
+      journeys.push(current);
+    }
+  }
+  return journeys;
+}
+function journeyLabel(journey){
+  const from = getLocationById(journey.firstLeg.locationId), to = getLocationById(journey.lastLeg.arrivalLocationId);
+  const route = [from?.name, to?.name].filter(Boolean).join(' → ') || (journey.firstLeg.provider||'Voo');
+  const stops = journey.legs.length-1;
+  return stops>0 ? `${route} (${stops} escala${stops>1?'s':''})` : route;
+}
 async function findJetlagCandidate(){
   const today = todayLocalISO();
-  const flights = (state.currentData.bookings||[]).filter(b=>b.category==='voo' && b.dateFrom && b.locationId && b.arrivalLocationId);
+  const journeys = groupFlightLegs();
   let best = null, bestDayDiff = Infinity;
-  for(const b of flights){
-    if(state.currentData.jetlagOptIn[b.id]===false) continue;
-    const dayDiff = Math.abs(daysUntil(b.dateFrom, today));
+  for(const j of journeys){
+    const journeyKey = j.firstLeg.id;
+    if(state.currentData.jetlagOptIn[journeyKey]===false) continue;
+    const dayDiff = Math.abs(daysUntil(j.firstLeg.dateFrom, today));
     if(dayDiff > 14) continue;
-    const from = getLocationById(b.locationId), to = getLocationById(b.arrivalLocationId);
+    const from = getLocationById(j.firstLeg.locationId), to = getLocationById(j.lastLeg.arrivalLocationId);
     if(!from || !to || from.lat==null || to.lat==null) continue;
     try{
       const [offA, offB] = await Promise.all([getUtcOffsetHours(from.lat, from.lon), getUtcOffsetHours(to.lat, to.lon)]);
       let diff = offB - offA;
       if(diff > 12) diff -= 24; if(diff < -12) diff += 24;
       if(Math.abs(diff) < JETLAG_TZ_THRESHOLD_HOURS) continue;
-      if(dayDiff < bestDayDiff){ bestDayDiff = dayDiff; best = {booking:b, diffHours:diff}; }
-    }catch(e){ /* sem internet ou API indisponível — tenta o próximo voo */ }
+      if(dayDiff < bestDayDiff){ bestDayDiff = dayDiff; best = {journey:j, diffHours:diff}; }
+    }catch(e){ /* sem internet ou API indisponível — tenta a próxima viagem */ }
   }
   return best;
 }
@@ -1613,7 +1643,9 @@ function jetlagLightWindows(wake, bed, advancing){
     ? { seek:[wake, jetlagShiftTime(wake,2)], avoid:[jetlagShiftTime(bed,-2), bed] }
     : { seek:[jetlagShiftTime(bed,-3), bed], avoid:[wake, jetlagShiftTime(wake,2)] };
 }
-function computeJetlagPlan(booking, diffHours, wakeTime){
+function computeJetlagPlan(journey, diffHours, wakeTime){
+  const departDate = journey.firstLeg.dateFrom;
+  const arriveDate = journey.lastLeg.dateTo || journey.lastLeg.dateFrom;
   const advancing = diffHours > 0;
   const shiftPerDay = advancing ? 1 : 1.5;
   const totalShift = Math.min(Math.abs(diffHours), 12);
@@ -1624,15 +1656,20 @@ function computeJetlagPlan(booking, diffHours, wakeTime){
   const sleepDuration = 8;
   const days = [];
   for(let i=1;i<=prepDaysCount;i++){
-    const date = addDaysISO(booking.dateFrom, -(prepDaysCount-i+1));
+    const date = addDaysISO(departDate, -(prepDaysCount-i+1));
     const cumulative = Math.min(totalShift, i*shiftPerDay);
     const wake = jetlagShiftTime(wakeTime, advancing ? -cumulative : cumulative);
     const bed = jetlagShiftTime(wake, -sleepDuration);
     days.push({date, phase:'prep', wake, bed, ...jetlagLightWindows(wake,bed,advancing)});
   }
-  days.push({date: booking.dateFrom, phase:'flight'});
+  const stops = journey.legs.length-1;
+  let travelDate = departDate, guard=0;
+  while(travelDate<=arriveDate && guard++<4){
+    days.push({date:travelDate, phase:'flight', stops});
+    travelDate = addDaysISO(travelDate, 1);
+  }
   for(let j=1;j<=arrivalDaysCount;j++){
-    const date = addDaysISO(booking.dateTo || booking.dateFrom, j-1);
+    const date = addDaysISO(arriveDate, j-1);
     const remaining = Math.max(0, remainingAtArrival - (j-1)*shiftPerDay);
     const wake = jetlagShiftTime(wakeTime, advancing ? remaining : -remaining);
     const bed = jetlagShiftTime(wake, -sleepDuration);
@@ -1640,11 +1677,12 @@ function computeJetlagPlan(booking, diffHours, wakeTime){
   }
   return {advancing, totalShift: Math.abs(diffHours), days};
 }
-function renderJetlagPlanHtml(booking, plan){
+function renderJetlagPlanHtml(journey, plan){
   const dirLabel = plan.advancing ? 'avançar — dormir e acordar mais cedo' : 'atrasar — dormir e acordar mais tarde';
   const rows = plan.days.map(d=>{
     if(d.phase==='flight'){
-      return `<div class="check-row"><div style="font-size:18px">✈️</div><div class="check-main"><div class="check-title">${fmtDateShort(d.date)} · Dia do voo</div><div class="check-meta">Ajusta já o relógio para a hora do destino; segue o horário-alvo tanto quanto possível a bordo.</div></div></div>`;
+      const stopsNote = d.stops>0 ? ` (inclui ${d.stops} escala${d.stops>1?'s':''})` : '';
+      return `<div class="check-row"><div style="font-size:18px">✈️</div><div class="check-main"><div class="check-title">${fmtDateShort(d.date)} · Dia de viagem${stopsNote}</div><div class="check-meta">Ajusta já o relógio para a hora do destino final; segue o horário-alvo tanto quanto possível a bordo.</div></div></div>`;
     }
     const label = d.phase==='prep' ? '🏠 Antes de partir' : '📍 Já no destino';
     return `<div class="check-row"><div class="check-main">
@@ -1653,10 +1691,10 @@ function renderJetlagPlanHtml(booking, plan){
     </div></div>`;
   }).join('');
   return `
-    <div class="flex-head"><h3 class="section-title" style="font-size:15px; margin:0;">🕐 Plano de ajuste de fuso — ${escapeHtml(booking.provider||'voo')}</h3>
-      <button class="btn btn-sm" onclick="dismissJetlag('${booking.id}')">Desativar</button>
+    <div class="flex-head"><h3 class="section-title" style="font-size:15px; margin:0;">🕐 Plano de ajuste de fuso — ${escapeHtml(journeyLabel(journey))}</h3>
+      <button class="btn btn-sm" onclick="dismissJetlag('${journey.firstLeg.id}')">Desativar</button>
     </div>
-    <p class="check-meta" style="margin:4px 0 12px;">Diferença de ~${Math.round(plan.totalShift)}h — o objetivo é ${dirLabel}, aos poucos. Orientação geral baseada na ciência de resposta circadiana à luz (a mesma base usada por apps como a Timeshifter) — não substitui conselho médico.</p>
+    <p class="check-meta" style="margin:4px 0 12px;">Diferença de ~${Math.round(plan.totalShift)}h entre a partida e o destino final — o objetivo é ${dirLabel}, aos poucos. Orientação geral baseada na ciência de resposta circadiana à luz (a mesma base usada por apps como a Timeshifter) — não substitui conselho médico.</p>
     ${rows}
     <p class="check-meta" style="margin-top:10px;">💊 Opcional: melatonina (~0,5mg) 30-60 min antes da nova hora de deitar — confirma com médico/farmacêutico antes de usar. ☕ Evita cafeína nas 6-8h antes de dormir.</p>
   `;
@@ -1669,42 +1707,43 @@ async function loadJetlagCard(){
     const boxNow = document.getElementById('jetlagBox');
     if(!boxNow) return;
     if(!candidate){ boxNow.style.display='none'; return; }
-    const { booking, diffHours } = candidate;
-    if(state.currentData.jetlagOptIn[booking.id]!==true){
+    const { journey, diffHours } = candidate;
+    const journeyKey = journey.firstLeg.id;
+    if(state.currentData.jetlagOptIn[journeyKey]!==true){
       const dir = diffHours>0 ? 'avançar' : 'atrasar';
       boxNow.innerHTML = `
-        <div class="flex-head"><h3 class="section-title" style="font-size:15px; margin:0;">🕐 Fuso horário muito diferente neste voo</h3></div>
-        <p class="check-meta" style="margin:4px 0 12px;">${escapeHtml(booking.provider||'Este voo')} muda cerca de ${Math.round(Math.abs(diffHours))}h — o teu relógio biológico vai precisar de ${dir}. Posso gerar um plano orientativo de luz e sono para os dias antes/depois (ciência tipo Timeshifter, não é conselho médico). É opcional.</p>
+        <div class="flex-head"><h3 class="section-title" style="font-size:15px; margin:0;">🕐 Fuso horário muito diferente nesta viagem</h3></div>
+        <p class="check-meta" style="margin:4px 0 12px;">${escapeHtml(journeyLabel(journey))} muda cerca de ${Math.round(Math.abs(diffHours))}h — o teu relógio biológico vai precisar de ${dir}. Posso gerar um plano orientativo de luz e sono para os dias antes/depois (ciência tipo Timeshifter, não é conselho médico). É opcional.</p>
         <div style="display:flex; gap:8px;">
-          <button class="btn btn-primary btn-sm" onclick="openJetlagOptInModal('${booking.id}')">Criar plano</button>
-          <button class="btn btn-sm" onclick="dismissJetlag('${booking.id}')">Não, obrigado</button>
+          <button class="btn btn-primary btn-sm" onclick="openJetlagOptInModal('${journeyKey}')">Criar plano</button>
+          <button class="btn btn-sm" onclick="dismissJetlag('${journeyKey}')">Não, obrigado</button>
         </div>`;
       boxNow.style.display = '';
       return;
     }
     const wakeTime = localStorage.getItem('travel-habitual-wake') || '07:00';
-    const plan = computeJetlagPlan(booking, diffHours, wakeTime);
-    boxNow.innerHTML = renderJetlagPlanHtml(booking, plan);
+    const plan = computeJetlagPlan(journey, diffHours, wakeTime);
+    boxNow.innerHTML = renderJetlagPlanHtml(journey, plan);
     boxNow.style.display = '';
   }catch(e){ /* offline ou API indisponível — o cartão fica escondido, sem quebrar a página */ }
 }
-function openJetlagOptInModal(bookingId){
+function openJetlagOptInModal(journeyKey){
   const current = localStorage.getItem('travel-habitual-wake') || '07:00';
   openModal(`<h3>Plano de ajuste de fuso</h3>
     <div class="field"><label>A que horas costumas acordar normalmente?</label><input type="time" id="jetlag_wake" value="${current}"></div>
-    <p style="font-size:12px; color:var(--text-dim); line-height:1.5;">Vamos gerar um plano orientativo de sono e exposição à luz para os dias antes e depois deste voo, com base em ciência de ritmo circadiano publicada — não substitui conselho médico.</p>
+    <p style="font-size:12px; color:var(--text-dim); line-height:1.5;">Vamos gerar um plano orientativo de sono e exposição à luz para os dias antes e depois desta viagem, com base em ciência de ritmo circadiano publicada — não substitui conselho médico.</p>
     <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" id="saveJetlagBtn">Criar plano</button></div>`);
   document.getElementById('saveJetlagBtn').onclick=()=>{
     const wake = document.getElementById('jetlag_wake').value || '07:00';
     localStorage.setItem('travel-habitual-wake', wake);
-    state.currentData.jetlagOptIn[bookingId] = true;
+    state.currentData.jetlagOptIn[journeyKey] = true;
     persistCurrentTrip();
     closeModal();
     loadJetlagCard();
   };
 }
-function dismissJetlag(bookingId){
-  state.currentData.jetlagOptIn[bookingId] = false;
+function dismissJetlag(journeyKey){
+  state.currentData.jetlagOptIn[journeyKey] = false;
   persistCurrentTrip();
   loadJetlagCard();
 }
