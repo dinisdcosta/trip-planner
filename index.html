@@ -377,6 +377,8 @@ select:focus, input:focus, textarea:focus{outline:2px solid var(--gold); outline
 .jg-seg.jg-avoid{background:repeating-linear-gradient(45deg, rgba(120,120,140,.25), rgba(120,120,140,.25) 4px, rgba(120,120,140,.08) 4px, rgba(120,120,140,.08) 8px); border:1px dashed var(--text-dim); z-index:2;}
 .jg-marker{position:absolute; top:-14px; transform:translateX(-50%); font-size:13px; z-index:3; cursor:default;}
 .jg-header-row .jg-track{background:transparent; border:none; height:16px; overflow:visible;}
+.jg-header-row.jg-ruler-bottom{margin-top:4px;}
+.jg-ruler-caption{font-size:9px; opacity:.75;}
 .jg-ruler{position:relative;}
 .jg-hour-mark{position:absolute; top:0; font:8px var(--font-mono); color:var(--text-dim); transform:translateX(-50%); opacity:.7;}
 .jg-hour-mark.jg-hour-mark-strong{font-size:9.5px; opacity:1; font-weight:600;}
@@ -1668,14 +1670,13 @@ function jetlagLightWindows(wake, bed, advancing){
     : { seek:[jetlagShiftTime(bed,-3), bed], avoid:[wake, jetlagShiftTime(wake,2)] };
 }
 const JETLAG_MAX_ARRIVAL_DAYS = 2;
-const JETLAG_MAX_PREP_DAYS = 5;
+const JETLAG_PREP_DAYS = 3;
 function computeJetlagPlan(journey, diffHours, wakeTime){
   const departDate = journey.firstLeg.dateFrom;
   const arriveDate = journey.lastLeg.dateTo || journey.lastLeg.dateFrom;
   const advancing = diffHours > 0;
   // Taxas com apoio de melatonina + cafeína bem cronometradas (o máximo defensável na
-  // literatura, não é instantâneo). Prioriza-se adiantar o máximo possível ANTES de partir,
-  // para que o ajuste depois de chegar fique concluído em, no máximo, 2 dias.
+  // literatura, não é instantâneo). Começa sempre 3 dias antes do primeiro voo.
   const shiftPerDay = advancing ? 1.5 : 2;
   const totalShift = Math.min(Math.abs(diffHours), 12);
   const stops = journey.legs.length-1;
@@ -1694,9 +1695,7 @@ function computeJetlagPlan(journey, diffHours, wakeTime){
   { let cur = departDate, guard=0; while(cur<arriveDate && guard++<4){ travelDates.push(cur); cur = addDaysISO(cur,1); } }
   const travelDaysCount = travelDates.length;
 
-  const neededBeforeArrival = Math.max(0, totalShift - JETLAG_MAX_ARRIVAL_DAYS*shiftPerDay);
-  const shiftingDaysBeforeArrival = Math.max(travelDaysCount, Math.ceil(neededBeforeArrival/shiftPerDay));
-  const prepDaysCount = Math.min(JETLAG_MAX_PREP_DAYS, Math.max(0, shiftingDaysBeforeArrival - travelDaysCount));
+  const prepDaysCount = JETLAG_PREP_DAYS;
   const doneByFlight = Math.min(totalShift, (prepDaysCount+travelDaysCount)*shiftPerDay);
   const remainingAtArrival = Math.max(0, totalShift - doneByFlight);
   const arrivalDaysCount = remainingAtArrival>0 ? Math.min(JETLAG_MAX_ARRIVAL_DAYS, Math.ceil(remainingAtArrival/shiftPerDay)) : 0;
@@ -1721,7 +1720,7 @@ function computeJetlagPlan(journey, diffHours, wakeTime){
     if(j===1) entry.stops = stops;
     days.push(entry);
   }
-  return {advancing, totalShift: Math.abs(diffHours), leftoverAfterPlan, days};
+  return {advancing, totalShift: Math.abs(diffHours), diffHours, leftoverAfterPlan, days};
 }
 function hhmmToPct(hhmm){
   const [h,m] = hhmm.split(':').map(Number);
@@ -1752,7 +1751,9 @@ function jetlagGanttRow(d, advancing){
   ];
   const caffeineCutoff = jetlagShiftTime(d.bed, -6);
   const markers = [{cls:'jg-caffeine', pct:hhmmToPct(caffeineCutoff), icon:'☕', title:`Evita cafeína a partir das ${caffeineCutoff}`}];
-  if(advancing) markers.push({cls:'jg-melatonin', pct:hhmmToPct(jetlagShiftTime(d.bed,-0.5)), icon:'💊', title:`Melatonina por volta das ${jetlagShiftTime(d.bed,-0.5)} (opcional, confirma com médico/farmacêutico)`});
+  // Para o efeito de mudar a fase do relógio (e não só como sonífero), a melatonina costuma
+  // ser tomada com mais antecedência do que "mesmo antes de dormir" — por volta de 1h30 antes.
+  if(advancing) markers.push({cls:'jg-melatonin', pct:hhmmToPct(jetlagShiftTime(d.bed,-1.5)), icon:'💊', title:`Melatonina por volta das ${jetlagShiftTime(d.bed,-1.5)} — cerca de 1h30 antes de deitar (opcional, confirma com médico/farmacêutico)`});
   const isTravelDay = d.phase==='travel';
   const isArrivalDay = d.phase==='arrival' && d.stops!=null;
   const label = d.phase==='prep' ? 'antes' : isTravelDay ? 'viagem' : (isArrivalDay ? 'chegada' : 'destino');
@@ -1769,13 +1770,25 @@ function jetlagGanttRow(d, advancing){
     </div>
   </div>${noteRow}`;
 }
+function formatJetlagHourMark(h){
+  const wrapped = ((h % 24) + 24) % 24;
+  const whole = Math.floor(wrapped + 1e-9);
+  const frac = wrapped - whole;
+  return frac < 0.01 ? `${whole}` : `${whole}:${String(Math.round(frac*60)).padStart(2,'0')}`;
+}
 function renderJetlagGantt(plan){
+  const originMarks = JETLAG_HOUR_MARKS.map(h=>({pct:(h/24)*100, label:h, strong:h%6===0}));
+  const destMarks = JETLAG_HOUR_MARKS.map(h=>({pct:(h/24)*100, label:formatJetlagHourMark(h+plan.diffHours), strong:h%6===0}));
   return `<div class="jetlag-gantt">
     <div class="jg-row jg-header-row">
-      <div class="jg-row-label"></div>
-      <div class="jg-track jg-ruler">${JETLAG_HOUR_MARKS.map(h=>`<span class="jg-hour-mark${h%6===0?' jg-hour-mark-strong':''}" style="left:${(h/24)*100}%">${h}</span>`).join('')}</div>
+      <div class="jg-row-label jg-ruler-caption">origem</div>
+      <div class="jg-track jg-ruler">${originMarks.map(m=>`<span class="jg-hour-mark${m.strong?' jg-hour-mark-strong':''}" style="left:${m.pct}%">${m.label}</span>`).join('')}</div>
     </div>
     ${plan.days.map(d=>jetlagGanttRow(d, plan.advancing)).join('')}
+    <div class="jg-row jg-header-row jg-ruler-bottom">
+      <div class="jg-row-label jg-ruler-caption">destino</div>
+      <div class="jg-track jg-ruler">${destMarks.map(m=>`<span class="jg-hour-mark${m.strong?' jg-hour-mark-strong':''}" style="left:${m.pct}%">${m.label}</span>`).join('')}</div>
+    </div>
     <div class="jg-legend">
       <span><i class="jg-swatch jg-sleep"></i>Dormir</span>
       <span><i class="jg-swatch jg-seek"></i>Procura luz forte</span>
