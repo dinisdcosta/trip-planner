@@ -69,6 +69,24 @@ body{
   letter-spacing:-0.01em;
 }
 .trip-picker{display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
+.menu-wrap{position:relative; display:inline-block;}
+.menu-dropdown{
+  position:absolute; top:calc(100% + 6px); right:0; z-index:40; min-width:210px;
+  background:var(--panel-alt); border:1px solid var(--border); border-radius:10px;
+  box-shadow:0 10px 30px rgba(0,0,0,.35); padding:6px; display:flex; flex-direction:column; gap:2px;
+}
+.menu-item{
+  font-family:var(--font-body); font-size:13.5px; text-align:left; background:transparent; border:none;
+  color:var(--text); padding:9px 10px; border-radius:7px; cursor:pointer; white-space:nowrap;
+}
+.menu-item:hover{background:var(--panel);}
+.money-subnav{display:flex; gap:6px; flex-wrap:wrap; margin-bottom:20px;}
+.money-subnav-btn{
+  font-family:var(--font-mono); font-size:11.5px; letter-spacing:.03em; text-transform:uppercase;
+  padding:8px 14px; border-radius:999px; cursor:pointer; color:var(--text-dim);
+  background:var(--panel-alt); border:1px solid var(--border);
+}
+.money-subnav-btn.active{color:var(--gold); border-color:var(--gold); background:rgba(201,162,77,.1);}
 select, input, textarea{
   font-family:var(--font-body); background:var(--panel-alt); color:var(--text);
   border:1px solid var(--border); border-radius:8px; padding:9px 12px; font-size:14px;
@@ -92,6 +110,9 @@ select:focus, input:focus, textarea:focus{outline:2px solid var(--gold); outline
 .icon-btn:hover{color:var(--text); background:var(--panel-alt);}
 
 /* ---------- Tabs ---------- */
+.tabs-scroll-wrap{position:relative;}
+.tabs-fade{position:absolute; top:0; right:0; bottom:2px; width:32px; background:linear-gradient(to right, transparent, var(--bg) 75%); pointer-events:none; opacity:0; transition:opacity .15s ease;}
+.tabs-fade.visible{opacity:1;}
 .tabs{display:flex; gap:6px; margin-bottom:24px; overflow-x:auto; padding-bottom:2px;}
 .tab{
   font-family:var(--font-mono); font-size:12.5px; letter-spacing:.04em; text-transform:uppercase;
@@ -336,7 +357,7 @@ select:focus, input:focus, textarea:focus{outline:2px solid var(--gold); outline
 
 /* ---------- Hoje, listas e módulos ---------- */
 .quick-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:22px}.quick-card,.list-card{background:var(--panel-alt);border:1px solid var(--border);border-radius:12px;padding:16px}.quick-card .kicker{font:11px var(--font-mono);text-transform:uppercase;letter-spacing:.07em;color:var(--text-dim)}.quick-card .big{font:600 20px var(--font-display);margin-top:6px}.flex-head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}.check-row{display:flex;align-items:flex-start;gap:11px;padding:12px 0;border-bottom:1px solid var(--border)}.check-row:last-child{border-bottom:0}.check-row.done{opacity:.58}.check-row.done .check-title{text-decoration:line-through}.round-check{width:24px;height:24px;border-radius:50%;border:1px solid var(--border);background:transparent;color:var(--sage);cursor:pointer;flex:0 0 auto}.round-check.checked{background:rgba(134,174,140,.14);border-color:var(--sage)}.check-main{flex:1;min-width:0}.check-title{font-weight:600;font-size:14px}.check-meta{color:var(--text-dim);font-size:12px;margin-top:3px;line-height:1.45}.badge{display:inline-flex;padding:3px 7px;border-radius:999px;background:rgba(201,162,77,.12);color:var(--gold);font:10.5px var(--font-mono);text-transform:uppercase}.module-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.offline-pill{display:inline-flex;align-items:center;gap:6px;font:10.5px var(--font-mono);color:var(--text-dim)}.offline-pill::before{content:'';width:7px;height:7px;border-radius:50%;background:var(--sage)}.offline-pill.offline::before{background:var(--coral)}
-.weather-strip{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:12px}.weather-day{text-align:center;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px 4px}.weather-day .wd-label{font:11px var(--font-mono);text-transform:uppercase;letter-spacing:.04em;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.weather-day .wd-place{font:600 9.5px var(--font-mono);text-transform:uppercase;letter-spacing:.03em;color:var(--gold);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px}.weather-day .wd-icon{font-size:22px;margin:6px 0}.weather-day .wd-temp{font:600 14px var(--font-display)}.weather-day .wd-min{color:var(--text-dim);font-weight:400;font-size:12px}@media (max-width:640px){.weather-strip{grid-template-columns:repeat(5,minmax(0,1fr));gap:5px}.weather-day{padding:8px 2px}.weather-day .wd-icon{font-size:18px}}
+.weather-strip{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:12px}.weather-day{text-align:center;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px 4px}.weather-day .wd-label{font:11px var(--font-mono);text-transform:uppercase;letter-spacing:.04em;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.weather-day .wd-place{font:600 9.5px var(--font-mono);text-transform:uppercase;letter-spacing:.03em;color:var(--gold);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px}.weather-day .wd-icon{font-size:22px;margin:6px 0}.weather-day .wd-temp{font:600 14px var(--font-display)}.weather-day .wd-min{color:var(--text-dim);font-weight:400;font-size:12px}@media (max-width:640px){.weather-strip{display:flex;overflow-x:auto;gap:8px;padding-bottom:4px;-webkit-overflow-scrolling:touch}.weather-day{flex:0 0 88px;padding:8px 4px}.weather-day .wd-label,.weather-day .wd-place{overflow:visible;white-space:normal}.weather-day .wd-icon{font-size:18px}}
 @media(max-width:820px){.quick-grid{grid-template-columns:1fr}.module-grid{grid-template-columns:1fr}.mobile-primary{position:fixed;right:18px;bottom:18px;z-index:30;border-radius:999px;box-shadow:0 8px 24px rgba(0,0,0,.3)}}
 </style>
 </head>
@@ -351,28 +372,33 @@ select:focus, input:focus, textarea:focus{outline:2px solid var(--gold); outline
     </div>
     <div class="trip-picker">
       <select id="tripSelect" aria-label="Escolher viagem"></select>
-      <button class="btn" id="editTripBtn" title="Editar viagem">Editar</button>
-      <button class="btn" id="duplicateTripBtn" title="Duplicar esta viagem (categorias, listas da mala e tarefas) para começar uma nova">⧉ Duplicar</button>
+      <button class="btn" id="searchBtn" title="Pesquisar em toda a viagem">🔎</button>
+      <button class="btn theme-btn" id="themeBtn" title="Alternar modo claro/escuro">☀️</button>
       <button class="btn btn-primary" id="newTripBtn">+ Nova viagem</button>
-      <button class="btn" id="searchBtn" title="Pesquisar em toda a viagem">🔎 Pesquisar</button>
-      <button class="btn" id="exportBtn" title="Descarregar um ficheiro de cópia de segurança desta viagem">⬇ Exportar</button>
-      <button class="btn" id="importBtn" title="Carregar um ficheiro exportado anteriormente">⬆ Importar</button>
-      <button class="btn" id="syncSettingsBtn" title="Definições de sincronização">🔗 Sincronizar</button>
-      <button class="btn theme-btn" id="themeBtn" title="Alternar modo claro/escuro">☀️ Claro</button>
+      <div class="menu-wrap">
+        <button class="btn" id="tripMenuBtn" title="Mais opções" aria-haspopup="true" aria-expanded="false">⋯</button>
+        <div class="menu-dropdown" id="tripMenuDropdown" style="display:none;">
+          <button class="menu-item" id="editTripBtn">✎ Editar viagem</button>
+          <button class="menu-item" id="duplicateTripBtn" title="Duplicar esta viagem (categorias, listas da mala e tarefas) para começar uma nova">⧉ Duplicar viagem</button>
+          <button class="menu-item" id="exportBtn" title="Descarregar um ficheiro de cópia de segurança desta viagem">⬇ Exportar</button>
+          <button class="menu-item" id="importBtn" title="Carregar um ficheiro exportado anteriormente">⬆ Importar</button>
+          <button class="menu-item" id="syncSettingsBtn">🔗 Sincronizar</button>
+        </div>
+      </div>
       <input type="file" id="importFile" accept="application/json" style="display:none;">
     </div>
   </div>
 
   <div id="tabsWrap">
+    <div class="tabs-scroll-wrap">
     <div class="tabs" id="tabs">
       <div class="tab active" data-tab="hoje" data-module="today">Hoje</div>
       <div class="tab" data-tab="roteiro" data-module="locations">Locais &amp; Mapa</div>
       <div class="tab" data-tab="reservas" data-module="bookings">Reservas</div>
       <div class="tab" data-tab="preparacao" data-module="preparation">Preparação</div>
-      <div class="tab" data-tab="despesas" data-module="expenses">Despesas</div>
-      <div class="tab" data-tab="saldo" data-module="expenses">Saldo</div>
-      <div class="tab" data-tab="orcamento" data-module="budget">Orçamento</div>
-      <div class="tab" data-tab="painel" data-module="dashboard">Resumo</div>
+      <div class="tab" data-money-group="despesas,saldo,orcamento,painel">💰 Dinheiro</div>
+    </div>
+    <div class="tabs-fade" id="tabsFade"></div>
     </div>
     <div class="panel" id="panelContent"></div>
   </div>
@@ -937,16 +963,28 @@ function bindGlobalEvents(){
   document.getElementById('tabs').addEventListener('click', (e)=>{
     const t = e.target.closest('.tab');
     if(!t) return;
-    state.activeTab = t.dataset.tab;
+    if(t.dataset.moneyGroup){
+      const modules = (state.currentData && state.currentData.modules) || {};
+      const enabledKeys = t.dataset.moneyGroup.split(',').filter(k=>{
+        const conf = MONEY_TABS.find(m=>m.key===k);
+        return !conf || modules[conf.module]!==false;
+      });
+      state.activeTab = (state.lastMoneyTab && enabledKeys.includes(state.lastMoneyTab)) ? state.lastMoneyTab : enabledKeys[0];
+    } else {
+      state.activeTab = t.dataset.tab;
+    }
     renderTabs();
     renderCurrentTab();
   });
+  document.getElementById('tabs').addEventListener('scroll', updateTabsFade);
+  window.addEventListener('resize', updateTabsFade);
   document.getElementById('exportBtn').addEventListener('click', exportTripData);
   document.getElementById('importBtn').addEventListener('click', ()=> document.getElementById('importFile').click());
   document.getElementById('importFile').addEventListener('change', importTripData);
   document.getElementById('syncSettingsBtn').addEventListener('click', openSyncModal);
   initTheme();
   document.getElementById('themeBtn').addEventListener('click', toggleTheme);
+  bindTripMenu();
   updateNetworkStatus();
   window.addEventListener('online', ()=>{ updateNetworkStatus(); if(syncConfigured()) pushToGitHub(); });
   window.addEventListener('offline', updateNetworkStatus);
@@ -967,6 +1005,28 @@ function bindGlobalEvents(){
   }, 60000);
 }
 
+function bindTripMenu(){
+  const btn = document.getElementById('tripMenuBtn');
+  const dropdown = document.getElementById('tripMenuDropdown');
+  if(!btn || !dropdown) return;
+  const close = ()=>{ dropdown.style.display='none'; btn.setAttribute('aria-expanded','false'); };
+  const open = ()=>{ dropdown.style.display='flex'; btn.setAttribute('aria-expanded','true'); };
+  btn.addEventListener('click', (e)=>{
+    e.stopPropagation();
+    if(dropdown.style.display==='none') open(); else close();
+  });
+  dropdown.addEventListener('click', (e)=>{ if(e.target.closest('.menu-item')) close(); });
+  document.addEventListener('click', (e)=>{ if(!dropdown.contains(e.target) && e.target!==btn) close(); });
+  document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') close(); });
+}
+function updateTabsFade(){
+  const tabsEl = document.getElementById('tabs');
+  const fadeEl = document.getElementById('tabsFade');
+  if(!tabsEl || !fadeEl) return;
+  const overflowing = tabsEl.scrollWidth > tabsEl.clientWidth + 2;
+  const atEnd = tabsEl.scrollLeft + tabsEl.clientWidth >= tabsEl.scrollWidth - 2;
+  fadeEl.classList.toggle('visible', overflowing && !atEnd);
+}
 function isUserEditing(){
   const modalOpen = document.getElementById('modalRoot') && document.getElementById('modalRoot').children.length > 0;
   const activeTag = document.activeElement && document.activeElement.tagName;
@@ -1181,7 +1241,9 @@ function toggleTheme(){
 }
 function updateThemeButton(){
   const b=document.getElementById('themeBtn'); if(!b) return;
-  b.textContent=document.documentElement.dataset.theme==='light'?'🌙 Escuro':'☀️ Claro';
+  const light = document.documentElement.dataset.theme==='light';
+  b.textContent = light?'🌙':'☀️';
+  b.title = light?'Mudar para modo escuro':'Mudar para modo claro';
 }
 function updateThemeColorMeta(){
   // Sem isto, alguns Android (Samsung Internet incluído) tentam "adivinhar" o tema
@@ -1218,18 +1280,41 @@ function renderHeader(){
   document.getElementById('tripTitle').textContent = cur ? cur.name : 'Diário de Viagem';
 }
 
+const MONEY_TABS = [
+  {key:'despesas', label:'Despesas', module:'expenses'},
+  {key:'saldo', label:'Saldo', module:'expenses'},
+  {key:'orcamento', label:'Orçamento', module:'budget'},
+  {key:'painel', label:'Resumo', module:'dashboard'},
+];
+function renderMoneySubNav(activeKey){
+  const modules=(state.currentData&&state.currentData.modules)||{};
+  const items = MONEY_TABS.filter(t=>modules[t.module]!==false);
+  return `<div class="money-subnav">${items.map(t=>`<button class="money-subnav-btn ${t.key===activeKey?'active':''}" onclick="state.activeTab='${t.key}';renderTabs();renderCurrentTab();">${escapeHtml(t.label)}</button>`).join('')}</div>`;
+}
 function renderTabs(){
   const modules=(state.currentData&&state.currentData.modules)||{};
+  if(MONEY_TABS.some(m=>m.key===state.activeTab)) state.lastMoneyTab = state.activeTab;
   document.querySelectorAll('.tab').forEach(t=>{
-    const visible=!t.dataset.module || modules[t.dataset.module]!==false;
-    t.style.display=visible?'':'none';
-    t.classList.toggle('active', t.dataset.tab === state.activeTab);
+    let visible, active;
+    if(t.dataset.moneyGroup){
+      const keys = t.dataset.moneyGroup.split(',');
+      visible = keys.some(k=>{ const conf=MONEY_TABS.find(m=>m.key===k); return !conf || modules[conf.module]!==false; });
+      active = keys.includes(state.activeTab);
+    } else {
+      visible = !t.dataset.module || modules[t.dataset.module]!==false;
+      active = t.dataset.tab === state.activeTab;
+    }
+    t.style.display = visible?'':'none';
+    t.classList.toggle('active', active);
   });
-  const active=document.querySelector(`.tab[data-tab="${state.activeTab}"]`);
-  if(active && active.style.display==='none'){
+  const activeEl = [...document.querySelectorAll('.tab')].find(t=>
+    t.dataset.moneyGroup ? t.dataset.moneyGroup.split(',').includes(state.activeTab) : t.dataset.tab===state.activeTab
+  );
+  if(!activeEl || activeEl.style.display==='none'){
     const first=[...document.querySelectorAll('.tab')].find(t=>t.style.display!=='none');
-    if(first) state.activeTab=first.dataset.tab;
+    if(first) state.activeTab = first.dataset.moneyGroup ? first.dataset.moneyGroup.split(',')[0] : first.dataset.tab;
   }
+  updateTabsFade();
 }
 
 function escapeHtml(str){
@@ -1864,6 +1949,7 @@ function renderDashboard(el){
   const pace = computeBudgetPace();
 
   el.innerHTML = `
+    ${renderMoneySubNav('painel')}
     <h2 class="section-title">Resumo da viagem</h2>
     <div class="hero-progress">
       <div class="ring-wrap">
@@ -2656,6 +2742,7 @@ function renderDespesas(el){
   })).filter(c=>c.spent>0).sort((a,b)=>b.spent-a.spent);
 
   el.innerHTML = `
+    ${renderMoneySubNav('despesas')}
     <h2 class="section-title">Despesas</h2>
     ${bookingSpend>0.005 ? `
     <div class="hero-progress" style="padding:16px 22px; margin-bottom:20px;">
@@ -2878,6 +2965,7 @@ function renderSaldo(el){
   const people = state.currentData.people;
   const currency = state.currentData.info.currency;
   el.innerHTML = `
+    ${renderMoneySubNav('saldo')}
     <h2 class="section-title">Saldo — quem pagou, quem deve</h2>
     <p style="color:var(--text-dim); font-size:13.5px; margin:-10px 0 18px; max-width:60ch; line-height:1.6;">
       Adiciona quem vai em viagem, indica quem pagou cada despesa e usa Fundos de viagem para registar levantamentos ou dinheiro entregue sem os contar como despesa.
@@ -2987,6 +3075,7 @@ function renderOrcamento(el){
   const free = totalBudget - allocated;
 
   el.innerHTML = `
+    ${renderMoneySubNav('orcamento')}
     <h2 class="section-title">Orçamento</h2>
     <div class="budget-total-row">
       <label>Orçamento total da viagem</label>
