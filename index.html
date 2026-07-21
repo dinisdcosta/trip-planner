@@ -2198,7 +2198,7 @@ function renderRoteiro(el){
   } else {
     el.innerHTML = `
       <div class="flex-head"><div><h2 class="section-title" style="margin-bottom:4px">Roteiro &amp; percurso</h2><div class="check-meta">Reservas, transportes, alojamentos e locais aparecem juntos por data e hora. A hora é sempre opcional.</div></div><div style="display:flex;gap:8px"><button class="btn btn-sm" onclick="openBookingModal('create')">+ Reserva</button><button class="btn btn-sm btn-primary" onclick="openLocationModal('create')">+ Local</button></div></div>
-      <div class="itin-layout" style="margin-top:18px"><div><div id="itinList">${listHtml}</div></div><div><div id="mapCanvas" class="map-canvas"></div><div class="map-legend-swatches">${mapLegendSwatches()}</div><div class="map-legend">Passa o rato num pin para o identificar, clica para detalhes e para editar, ou arrasta para afinar a posição — a morada atualiza-se sozinha. A linha tracejada segue a ordem cronológica do roteiro (mesma numeração dos pins), não a distância — as setas mostram o sentido. ⛶ abre o mapa em ecrã inteiro, 📥 guarda esta zona para offline.</div><div class="map-credit">Mapa: © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors</div></div></div>`;
+      <div class="itin-layout" style="margin-top:18px"><div><div id="itinList">${listHtml}</div></div><div><div id="mapCanvas" class="map-canvas"></div><div class="map-legend-swatches">${mapLegendSwatches()}</div><div class="map-legend">Passa o rato num pin para o identificar, clica para detalhes e para editar, ou arrasta para afinar a posição — a morada atualiza-se sozinha. A linha tracejada segue a ordem cronológica do roteiro (mesma numeração dos pins), não a distância — as setas mostram o sentido. Locais sem data nem reserva associada aparecem só como pin, sem número nem linha. ⛶ abre o mapa em ecrã inteiro, 📥 guarda esta zona para offline.</div><div class="map-credit">Mapa: © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors</div></div></div>`;
   }
   renderMapCanvas();
   const pinned = state.currentData.locations.filter(l=>l.lat!=null && l.lon!=null);
@@ -2262,13 +2262,16 @@ function popoverHtmlFor(loc){
     <div style="margin-top:8px;"><button type="button" class="btn btn-sm" onclick="openLocationModal('edit','${loc.id}')">Editar</button></div>
   `;
 }
+function locationHasChronoAnchor(loc){
+  return !!(loc.day || relatedBookingsForLocation(loc).length);
+}
 function buildPinDivIcon(loc, index){
   const v = locationPinVisual(loc);
   const when = loc.day ? `${fmtDateShort(loc.day)}${loc.time?' · '+loc.time:''}` : v.label;
   const html = `
     <div class="pin-badge">
       <div class="dot" style="background:${v.color};"><span>${v.icon}</span></div>
-      <span class="pin-num">${index+1}</span>
+      ${index!=null ? `<span class="pin-num">${index+1}</span>` : ''}
     </div>
     <div class="pin-tip">
       <div class="pin-tip-cat">${escapeHtml(v.label)}</div>
@@ -2451,16 +2454,19 @@ function renderMapCanvas(){
     if(!currentIds.has(id)){ leafletMapInstance.removeLayer(marker); leafletMarkers.delete(id); }
   }
   const latlngs = [];
-  locs.forEach((loc, i)=>{
+  let routeIndex = 0;
+  locs.forEach((loc)=>{
+    const anchored = locationHasChronoAnchor(loc);
+    const badgeIndex = anchored ? routeIndex++ : null;
     const ll = [loc.lat, loc.lon];
-    latlngs.push(ll);
+    if(anchored) latlngs.push(ll);
     let marker = leafletMarkers.get(loc.id);
     if(marker){
       marker.setLatLng(ll);
-      marker.setIcon(buildPinDivIcon(loc, i));
+      marker.setIcon(buildPinDivIcon(loc, badgeIndex));
       marker.setPopupContent(popoverHtmlFor(loc));
     } else {
-      marker = L.marker(ll, {icon:buildPinDivIcon(loc,i), draggable:true});
+      marker = L.marker(ll, {icon:buildPinDivIcon(loc,badgeIndex), draggable:true});
       marker.bindPopup(popoverHtmlFor(loc), {className:'map-popover-wrap', maxWidth:230});
       marker.on('dragend', ()=>onMarkerDragEnd(loc.id));
       marker.addTo(leafletMapInstance);
