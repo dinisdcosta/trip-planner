@@ -336,6 +336,7 @@ select:focus, input:focus, textarea:focus{outline:2px solid var(--gold); outline
 
 /* ---------- Hoje, listas e módulos ---------- */
 .quick-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:22px}.quick-card,.list-card{background:var(--panel-alt);border:1px solid var(--border);border-radius:12px;padding:16px}.quick-card .kicker{font:11px var(--font-mono);text-transform:uppercase;letter-spacing:.07em;color:var(--text-dim)}.quick-card .big{font:600 20px var(--font-display);margin-top:6px}.flex-head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}.check-row{display:flex;align-items:flex-start;gap:11px;padding:12px 0;border-bottom:1px solid var(--border)}.check-row:last-child{border-bottom:0}.check-row.done{opacity:.58}.check-row.done .check-title{text-decoration:line-through}.round-check{width:24px;height:24px;border-radius:50%;border:1px solid var(--border);background:transparent;color:var(--sage);cursor:pointer;flex:0 0 auto}.round-check.checked{background:rgba(134,174,140,.14);border-color:var(--sage)}.check-main{flex:1;min-width:0}.check-title{font-weight:600;font-size:14px}.check-meta{color:var(--text-dim);font-size:12px;margin-top:3px;line-height:1.45}.badge{display:inline-flex;padding:3px 7px;border-radius:999px;background:rgba(201,162,77,.12);color:var(--gold);font:10.5px var(--font-mono);text-transform:uppercase}.module-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.offline-pill{display:inline-flex;align-items:center;gap:6px;font:10.5px var(--font-mono);color:var(--text-dim)}.offline-pill::before{content:'';width:7px;height:7px;border-radius:50%;background:var(--sage)}.offline-pill.offline::before{background:var(--coral)}
+.weather-strip{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:12px}.weather-day{text-align:center;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px 4px}.weather-day .wd-label{font:11px var(--font-mono);text-transform:uppercase;letter-spacing:.04em;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.weather-day .wd-icon{font-size:22px;margin:6px 0}.weather-day .wd-temp{font:600 14px var(--font-display)}.weather-day .wd-min{color:var(--text-dim);font-weight:400;font-size:12px}@media (max-width:640px){.weather-strip{grid-template-columns:repeat(5,minmax(0,1fr));gap:5px}.weather-day{padding:8px 2px}.weather-day .wd-icon{font-size:18px}}
 @media(max-width:820px){.quick-grid{grid-template-columns:1fr}.module-grid{grid-template-columns:1fr}.mobile-primary{position:fixed;right:18px;bottom:18px;z-index:30;border-radius:999px;box-shadow:0 8px 24px rgba(0,0,0,.3)}}
 </style>
 </head>
@@ -1265,16 +1266,18 @@ async function getDestinationCoords(){
   const info = state.currentData.info;
   if(!info.destination) return null;
   if(info.destLat!=null && info.destLon!=null && info.destGeocodedFor===info.destination){
-    return {lat:info.destLat, lon:info.destLon};
+    return {lat:info.destLat, lon:info.destLon, label:info.destLabel||info.destination};
   }
   try{
     const res = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(info.destination)}`, {headers:{'Accept-Language':'pt-PT,pt;q=0.9,en;q=0.7'}});
     if(!res.ok) return null;
     const rows = await res.json();
     if(!rows.length) return null;
-    info.destLat = Number(rows[0].lat); info.destLon = Number(rows[0].lon); info.destGeocodedFor = info.destination;
+    const r = rows[0];
+    const label = (r.display_name ? r.display_name.split(',').slice(0,2).join(',').trim() : '') || info.destination;
+    info.destLat = Number(r.lat); info.destLon = Number(r.lon); info.destGeocodedFor = info.destination; info.destLabel = label;
     persistCurrentTrip();
-    return {lat:info.destLat, lon:info.destLon};
+    return {lat:info.destLat, lon:info.destLon, label};
   }catch(e){ return null; }
 }
 let weatherCache = null;
@@ -1291,19 +1294,31 @@ async function fetchWeatherForecast(lat, lon){
   weatherCache = {key, fetchedAt:Date.now(), data:days};
   return days;
 }
-async function loadAndRenderWeather(targetDate, label){
+async function loadAndRenderWeather(targetDate, firstDayLabel){
   const box = document.getElementById('weatherBox');
   if(!box) return;
   try{
     const coords = await getDestinationCoords();
     if(!coords) return;
     const days = await fetchWeatherForecast(coords.lat, coords.lon);
-    const day = days.find(x=>x.date===targetDate);
-    if(!day) return; // fora do alcance da previsão (só cobre ~16 dias)
-    const w = WMO_WEATHER[day.code] || {icon:'🌡️', label:''};
+    const startIdx = days.findIndex(x=>x.date===targetDate);
+    if(startIdx===-1) return; // fora do alcance da previsão (só cobre ~16 dias)
+    const slice = days.slice(startIdx, startIdx+5);
     const boxNow = document.getElementById('weatherBox');
     if(!boxNow) return;
-    boxNow.innerHTML = `<div class="kicker">${escapeHtml(label)}</div><div class="big">${w.icon} ${Math.round(day.max)}° / ${Math.round(day.min)}°</div><div class="check-meta" style="margin-top:2px;">${escapeHtml(w.label)}</div>`;
+    boxNow.innerHTML = `
+      <div class="flex-head"><h3 class="section-title" style="font-size:15px; margin:0;">🌤️ Previsão em ${escapeHtml(coords.label)}</h3></div>
+      <div class="weather-strip">
+        ${slice.map((day,i)=>{
+          const w = WMO_WEATHER[day.code] || {icon:'🌡️', label:''};
+          const dayLabel = i===0 ? firstDayLabel : new Date(day.date+'T00:00:00').toLocaleDateString('pt-PT',{weekday:'short', day:'2-digit', month:'2-digit'});
+          return `<div class="weather-day" title="${escapeHtml(w.label)}">
+            <div class="wd-label">${escapeHtml(dayLabel)}</div>
+            <div class="wd-icon">${w.icon}</div>
+            <div class="wd-temp">${Math.round(day.max)}°<span class="wd-min">/${Math.round(day.min)}°</span></div>
+          </div>`;
+        }).join('')}
+      </div>`;
     boxNow.style.display = '';
   }catch(e){ /* offline ou API indisponível — o cartão fica escondido, sem quebrar a página */ }
 }
@@ -1389,11 +1404,11 @@ function renderToday(el){
         </div>
       </div>
       ${renderFlightCheckinCard(getUpcomingFlightCheckins())}
+      <div class="list-card" id="weatherBox" style="display:none; margin-top:18px;"></div>
       <div class="quick-grid">
         <div class="quick-card"><div class="kicker">Tarefas por fazer</div><div class="big">${urgent.length}</div></div>
         <div class="quick-card"><div class="kicker">Já gasto/comprometido</div><div class="big">${fmtMoney(totalSpent, info.currency)}</div></div>
         <div class="quick-card"><div class="kicker">Mala preparada</div><div class="big">${pack.pct!=null?pack.pct+'%':'—'}</div></div>
-        <div class="quick-card" id="weatherBox" style="display:none;"></div>
       </div>
       <div class="chart-row">
         <div class="list-card"><div class="flex-head"><h3 class="section-title">Falta tratar</h3><button class="btn btn-sm" onclick="openTaskModal()">+ Tarefa</button></div>${renderTaskRows(urgent)}</div>
@@ -1419,12 +1434,12 @@ function renderToday(el){
     el.innerHTML=`
       <div class="flex-head"><div><h2 class="section-title" style="margin-bottom:4px">Hoje · Dia ${dayNum} de ${totalDays}</h2><div style="color:var(--text-dim);font-size:13px">${fmtDateShort(today)} — o que precisas de saber hoje.</div></div><button class="btn btn-primary" onclick="openLocationModal('create')">+ Guardar local</button></div>
       ${renderFlightCheckinCard(getUpcomingFlightCheckins())}
-      <div class="quick-grid" style="margin-top:20px">
+      <div class="list-card" id="weatherBox" style="display:none; margin-top:18px;"></div>
+      <div class="quick-grid" style="margin-top:18px">
         <div class="quick-card"><div class="kicker">Compromissos hoje</div><div class="big">${todayAgenda.length}</div></div>
         <div class="quick-card"><div class="kicker">Gasto hoje</div><div class="big">${fmtMoney(spentToday, info.currency)}</div></div>
         <div class="quick-card"><div class="kicker">Falta tratar</div><div class="big">${urgent.length}</div></div>
         <div class="quick-card"><div class="kicker">Orçamento restante</div><div class="big ${remaining<0?'over':''}" style="${remaining<0?'color:var(--coral)':''}">${totalBudget>0?fmtMoney(remaining, info.currency):'—'}</div></div>
-        <div class="quick-card" id="weatherBox" style="display:none;"></div>
       </div>
       <div class="chart-row">
         <div class="list-card"><div class="flex-head"><h3 class="section-title">Agenda de hoje</h3><button class="btn btn-sm" onclick="state.activeTab='roteiro';renderTabs();renderCurrentTab()">Ver roteiro</button></div>${todayAgenda.length?todayAgenda.map(renderAgendaRow).join(''):'<div class="check-meta">Nada marcado para hoje — dia livre.</div>'}</div>
