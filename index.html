@@ -1678,38 +1678,46 @@ function computeJetlagPlan(journey, diffHours, wakeTime){
   // para que o ajuste depois de chegar fique concluído em, no máximo, 2 dias.
   const shiftPerDay = advancing ? 1.5 : 2;
   const totalShift = Math.min(Math.abs(diffHours), 12);
+  const stops = journey.legs.length-1;
+  const sleepDuration = 8;
+  const buildDay = (date, phase, cumulative, extra) => {
+    const wake = jetlagShiftTime(wakeTime, advancing ? -cumulative : cumulative);
+    const bed = jetlagShiftTime(wake, -sleepDuration);
+    return {date, phase, wake, bed, ...jetlagLightWindows(wake,bed,advancing), ...(extra||{})};
+  };
+
+  // Dias de viagem a meio do trajeto (ex: escala de vários dias) também contam para o
+  // ajuste, em vez de ficarem parados sem indicação nenhuma — continuam a deslocar o
+  // horário tal como um dia de preparação, só que com uma nota a lembrar que ainda estás
+  // a caminho. Só o dia em que chegas ao destino final é que passa a ser "chegada".
+  const travelDates = [];
+  { let cur = departDate, guard=0; while(cur<arriveDate && guard++<4){ travelDates.push(cur); cur = addDaysISO(cur,1); } }
+  const travelDaysCount = travelDates.length;
+
   const neededBeforeArrival = Math.max(0, totalShift - JETLAG_MAX_ARRIVAL_DAYS*shiftPerDay);
-  const prepDaysCount = Math.min(JETLAG_MAX_PREP_DAYS, Math.ceil(neededBeforeArrival/shiftPerDay));
-  const doneByFlight = Math.min(totalShift, prepDaysCount*shiftPerDay);
+  const shiftingDaysBeforeArrival = Math.max(travelDaysCount, Math.ceil(neededBeforeArrival/shiftPerDay));
+  const prepDaysCount = Math.min(JETLAG_MAX_PREP_DAYS, Math.max(0, shiftingDaysBeforeArrival - travelDaysCount));
+  const doneByFlight = Math.min(totalShift, (prepDaysCount+travelDaysCount)*shiftPerDay);
   const remainingAtArrival = Math.max(0, totalShift - doneByFlight);
   const arrivalDaysCount = remainingAtArrival>0 ? Math.min(JETLAG_MAX_ARRIVAL_DAYS, Math.ceil(remainingAtArrival/shiftPerDay)) : 0;
   const leftoverAfterPlan = Math.max(0, remainingAtArrival - arrivalDaysCount*shiftPerDay);
-  const sleepDuration = 8;
+
   const days = [];
   for(let i=1;i<=prepDaysCount;i++){
     const date = addDaysISO(departDate, -(prepDaysCount-i+1));
-    const cumulative = Math.min(totalShift, i*shiftPerDay);
-    const wake = jetlagShiftTime(wakeTime, advancing ? -cumulative : cumulative);
-    const bed = jetlagShiftTime(wake, -sleepDuration);
-    days.push({date, phase:'prep', wake, bed, ...jetlagLightWindows(wake,bed,advancing)});
+    days.push(buildDay(date, 'prep', Math.min(totalShift, i*shiftPerDay)));
   }
-  const stops = journey.legs.length-1;
-  // Dias de viagem só até ao dia ANTES da chegada final — o dia em que chegas ao destino
-  // (mesmo que ainda seja o mesmo dia de uma escala) já entra como o 1º dia de ajuste,
-  // com o horário completo, em vez de aparecer duplicado (uma linha vazia "dia de viagem"
-  // e outra por baixo com o horário, ambas na mesma data).
-  let travelDate = departDate, guard=0;
-  while(travelDate<arriveDate && guard++<4){
-    days.push({date:travelDate, phase:'flight', stops});
-    travelDate = addDaysISO(travelDate, 1);
-  }
+  travelDates.forEach((date, idx)=>{
+    const dayNum = prepDaysCount + idx + 1;
+    days.push(buildDay(date, 'travel', Math.min(totalShift, dayNum*shiftPerDay), {stops}));
+  });
   const effectiveArrivalDays = Math.max(1, arrivalDaysCount);
   for(let j=1;j<=effectiveArrivalDays;j++){
     const date = addDaysISO(arriveDate, j-1);
     const remaining = arrivalDaysCount>0 ? Math.max(0, remainingAtArrival - (j-1)*shiftPerDay) : 0;
-    const wake = jetlagShiftTime(wakeTime, advancing ? remaining : -remaining);
-    const bed = jetlagShiftTime(wake, -sleepDuration);
-    const entry = {date, phase:'arrival', wake, bed, ...jetlagLightWindows(wake,bed,advancing)};
+    // Nos dias de chegada o sinal inverte: em vez de "quanto já avancei" (dias de preparação
+    // e viagem), é "quanto ainda falta" — daí passar -remaining (ver buildDay).
+    const entry = buildDay(date, 'arrival', -remaining);
     if(j===1) entry.stops = stops;
     days.push(entry);
   }
@@ -1729,13 +1737,6 @@ function jetlagHourGridlines(){
   return JETLAG_HOUR_MARKS.map(h=>`<div class="jg-gridline${h%6===0?' jg-gridline-strong':''}" style="left:${(h/24)*100}%"></div>`).join('');
 }
 function jetlagGanttRow(d, advancing){
-  if(d.phase==='flight'){
-    const stopsNote = d.stops>0 ? ` · ${d.stops} escala${d.stops>1?'s':''}` : '';
-    return `<div class="jg-row">
-      <div class="jg-row-label">${fmtDateShort(d.date)}<div class="jg-row-sub">viagem</div></div>
-      <div class="jg-track jg-track-flight">${jetlagHourGridlines()}<span style="position:relative;">✈️ Dia de viagem${stopsNote} — ajusta já o relógio para a hora do destino final</span></div>
-    </div>`;
-  }
   const wakePct = hhmmToPct(d.wake), bedPct = hhmmToPct(d.bed);
   // Normalmente o deitar (noite) fica depois do acordar (manhã) no relógio de 24h, e o sono
   // "parte" o dia em dois bocados (fim da noite anterior + início desta noite). Mas com
@@ -1752,12 +1753,13 @@ function jetlagGanttRow(d, advancing){
   const caffeineCutoff = jetlagShiftTime(d.bed, -6);
   const markers = [{cls:'jg-caffeine', pct:hhmmToPct(caffeineCutoff), icon:'☕', title:`Evita cafeína a partir das ${caffeineCutoff}`}];
   if(advancing) markers.push({cls:'jg-melatonin', pct:hhmmToPct(jetlagShiftTime(d.bed,-0.5)), icon:'💊', title:`Melatonina por volta das ${jetlagShiftTime(d.bed,-0.5)} (opcional, confirma com médico/farmacêutico)`});
-  const isArrivalDay = d.stops!=null;
-  const label = d.phase==='prep' ? 'antes' : (isArrivalDay ? 'chegada' : 'destino');
-  const noteRow = isArrivalDay ? `<div class="jg-row jg-note-row">
-    <div class="jg-row-label"></div>
-    <div class="jg-arrival-note">✈️ Chegas hoje ao destino final${d.stops>0?` (${d.stops} escala${d.stops>1?'s':''})`:''}</div>
-  </div>` : '';
+  const isTravelDay = d.phase==='travel';
+  const isArrivalDay = d.phase==='arrival' && d.stops!=null;
+  const label = d.phase==='prep' ? 'antes' : isTravelDay ? 'viagem' : (isArrivalDay ? 'chegada' : 'destino');
+  const stopsTxt = d.stops>0 ? ` (${d.stops} escala${d.stops>1?'s':''})` : '';
+  let noteRow = '';
+  if(isTravelDay) noteRow = `<div class="jg-row jg-note-row"><div class="jg-row-label"></div><div class="jg-arrival-note">✈️ Ainda a caminho do destino final${stopsTxt}</div></div>`;
+  else if(isArrivalDay) noteRow = `<div class="jg-row jg-note-row"><div class="jg-row-label"></div><div class="jg-arrival-note">✈️ Chegas hoje ao destino final${stopsTxt}</div></div>`;
   return `<div class="jg-row">
     <div class="jg-row-label">${fmtDateShort(d.date)}<div class="jg-row-sub">${label}</div></div>
     <div class="jg-track">
