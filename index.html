@@ -398,20 +398,33 @@ function getCategories(){
   return (Array.isArray(cats) && cats.length) ? cats : DEFAULT_CATEGORIES;
 }
 const CURRENCIES = ['EUR','USD','GBP','BRL'];
-const EXPENSE_CURRENCIES = ['EUR','USD','GBP','JPY','CHF','CAD','AUD','BRL','CNY','INR','MXN','THB','TRY','SGD','HKD','KRW','NZD','ZAR','PLN','CZK','DKK','NOK','SEK','HUF','ILS','MYR','PHP','RON','ISK','IDR'];
-let fxRateCache = {};
-async function getExchangeRate(from, to){
-  if(from===to) return 1;
-  const key = `${from}_${to}`;
-  const cached = fxRateCache[key];
-  if(cached && (Date.now()-cached.fetchedAt)<3600000) return cached.rate;
-  const res = await fetch(`https://api.frankfurter.dev/v1/latest?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+// Lista de reserva (offline / falha de rede) — a lista completa (~160 moedas) vem da API em runtime.
+const EXPENSE_CURRENCIES_FALLBACK = ['EUR','USD','GBP','JPY','CHF','CAD','AUD','BRL','CNY','INR','MXN','THB','TRY','SGD','HKD','KRW','NZD','ZAR','PLN','CZK','DKK','NOK','SEK','HUF','ILS','MYR','PHP','RON','ISK','IDR'];
+let EXPENSE_CURRENCIES = EXPENSE_CURRENCIES_FALLBACK;
+const fxTableCache = {};
+async function getFxTable(base){
+  const cached = fxTableCache[base];
+  if(cached && (Date.now()-cached.fetchedAt)<3600000) return cached.rates;
+  const res = await fetch(`https://open.er-api.com/v6/latest/${encodeURIComponent(base)}`);
   if(!res.ok) throw new Error('Falha ao obter câmbio');
   const json = await res.json();
-  const rate = json.rates && json.rates[to];
+  if(json.result!=='success' || !json.rates) throw new Error('Câmbio indisponível');
+  fxTableCache[base] = {rates:json.rates, fetchedAt:Date.now()};
+  return json.rates;
+}
+async function getExchangeRate(from, to){
+  if(from===to) return 1;
+  const rates = await getFxTable(from);
+  const rate = rates[to];
   if(rate==null) throw new Error('Câmbio indisponível para '+to);
-  fxRateCache[key] = {rate, fetchedAt:Date.now()};
   return rate;
+}
+async function warmExpenseCurrencies(){
+  try{
+    const rates = await getFxTable('EUR');
+    const codes = Object.keys(rates).sort();
+    if(codes.length) EXPENSE_CURRENCIES = codes;
+  }catch(e){ /* offline — mantém a lista de reserva */ }
 }
 async function updateExpenseConversionHint(){
   const amountEl = document.getElementById('e_amount');
@@ -778,6 +791,7 @@ function blankTripData(info){
     modules: {today:true,locations:true,bookings:true,preparation:true,expenses:true,budget:true,dashboard:true},
     budgetCategories: DEFAULT_CATEGORIES.map(c=>({id:c.key, key:c.key, label:c.label, icon:c.icon, color:c.color, planned:0})),
     tombstones: {locations:[], expenses:[], bookings:[], advances:[], people:[], tasks:[], packingLists:[], packingItems:[], budgetCategories:[]},
+    dismissedPackingTips: [],
   };
 }
 const TOMBSTONE_KEYS = ['locations','expenses','bookings','advances','people','tasks','packingLists','packingItems','budgetCategories'];
@@ -799,6 +813,7 @@ function ensureShape(data){
     });
   }
   if(!data.modules) data.modules = {today:true,locations:true,bookings:true,preparation:true,expenses:true,budget:true,dashboard:true};
+  if(!Array.isArray(data.dismissedPackingTips)) data.dismissedPackingTips = [];
   if(!data.tombstones) data.tombstones = {};
   TOMBSTONE_KEYS.forEach(k=>{ if(!Array.isArray(data.tombstones[k])) data.tombstones[k] = []; });
   data.locations.forEach(l=>{
@@ -862,6 +877,7 @@ async function init(){
   // pode impedir os cliques depois de atualizar o ficheiro e recarregar a página.
   try { bindGlobalEvents(); } catch(err) { console.error('Falha ao ligar eventos globais:', err); }
   try { renderHeader(); renderTabs(); renderCurrentTab(); } catch(err) { console.error('Falha no desenho inicial:', err); }
+  if(navigator.onLine) warmExpenseCurrencies().catch(()=>{});
 
   // Carrega os dados locais de forma isolada. Se um registo antigo/corrompido falhar,
   // a interface continua ativa e o utilizador pode abrir definições ou importar dados.
@@ -1373,6 +1389,86 @@ async function loadAndRenderWeather(targetDate, firstDayLabel){
     boxNow.style.display = '';
   }catch(e){ /* offline ou API indisponível — o cartão fica escondido, sem quebrar a página */ }
 }
+const RAIN_WEATHER_CODES = new Set([51,53,55,56,57,61,63,65,66,67,80,81,82,95,96,99]);
+const SNOW_WEATHER_CODES = new Set([71,73,75,77,85,86]);
+function tripForecastDateRange(){
+  const info = state.currentData.info;
+  if(!info.startDate || !info.endDate) return [];
+  const today = todayLocalISO();
+  const start = info.startDate > today ? info.startDate : today;
+  const horizonEnd = addDaysISO(today, 15);
+  const end = info.endDate < horizonEnd ? info.endDate : horizonEnd;
+  if(start > end) return [];
+  const dates = [];
+  let cur = start;
+  while(cur<=end && dates.length<16){ dates.push(cur); cur = addDaysISO(cur,1); }
+  return dates;
+}
+function allPackingItemNames(){
+  return (state.currentData.packingLists||[]).flatMap(l=>l.items.map(i=>(i.name||'').trim().toLocaleLowerCase()));
+}
+async function computePackingWeatherSuggestions(){
+  const dates = tripForecastDateRange();
+  if(!dates.length) return [];
+  const days = [];
+  for(const dateStr of dates){
+    const coords = coordsForDate(dateStr) || await getDestinationCoords();
+    if(!coords) continue;
+    const forecast = await fetchWeatherForecast(coords.lat, coords.lon);
+    const day = forecast.find(x=>x.date===dateStr);
+    if(day) days.push(day);
+  }
+  if(!days.length) return [];
+  const rainDays = days.filter(d=>RAIN_WEATHER_CODES.has(d.code));
+  const snowDays = days.filter(d=>SNOW_WEATHER_CODES.has(d.code));
+  const coldDays = days.filter(d=>d.min<12);
+  const hotDays = days.filter(d=>d.max>28);
+  const suggestions = [];
+  if(rainDays.length) suggestions.push({key:'guarda-chuva', icon:'☔', label:'Guarda-chuva ou capa de chuva', reason:`Chuva prevista em ${rainDays.length} dia(s)`});
+  if(snowDays.length) suggestions.push({key:'roupa-neve', icon:'🧤', label:'Roupa e calçado para neve', reason:`Neve prevista em ${snowDays.length} dia(s)`});
+  if(coldDays.length) suggestions.push({key:'casaco-quente', icon:'🧥', label:'Casaco quente', reason:`Mínimas até ${Math.round(Math.min(...coldDays.map(d=>d.min)))}°C`});
+  if(hotDays.length) suggestions.push({key:'protetor-solar', icon:'🧴', label:'Protetor solar e chapéu', reason:`Máximas até ${Math.round(Math.max(...hotDays.map(d=>d.max)))}°C`});
+  const existing = allPackingItemNames();
+  const dismissed = new Set(state.currentData.dismissedPackingTips||[]);
+  return suggestions.filter(s=>!dismissed.has(s.key) && !existing.includes(s.label.toLocaleLowerCase()));
+}
+async function loadPackingWeatherTip(){
+  const box = document.getElementById('packingWeatherTip');
+  if(!box) return;
+  try{
+    const suggestions = await computePackingWeatherSuggestions();
+    const boxNow = document.getElementById('packingWeatherTip');
+    if(!boxNow) return;
+    if(!suggestions.length){ boxNow.style.display='none'; return; }
+    boxNow.innerHTML = `
+      <div class="flex-head"><h3 class="section-title" style="font-size:15px; margin:0;">🌤️ Sugestões com base na previsão</h3></div>
+      ${suggestions.map(s=>`<div class="check-row">
+        <div style="font-size:18px">${s.icon}</div>
+        <div class="check-main"><div class="check-title">${escapeHtml(s.label)}</div><div class="check-meta">${escapeHtml(s.reason)}</div></div>
+        <button class="btn btn-sm" onclick="addSuggestedPackingItem('${s.key}','${escapeHtml(s.label).replace(/'/g,"\\'")}')">+ Adicionar</button>
+        <button class="icon-btn" title="Dispensar" onclick="dismissPackingTip('${s.key}')">✕</button>
+      </div>`).join('')}
+    `;
+    boxNow.style.display = '';
+  }catch(e){ /* offline ou API indisponível — o cartão fica escondido, sem quebrar a página */ }
+}
+function addSuggestedPackingItem(key, label){
+  let list = state.currentData.packingLists.find(l=>!l.parentId);
+  if(!list){
+    list = {id:uid(), name:'Mala principal', items:[], parentId:null, icon:'🎒', color:CATEGORY_COLOR_CHOICES[0]};
+    state.currentData.packingLists.push(list);
+  }
+  list.items.push({id:uid(), name:label, qty:'', owner:'', done:false});
+  if(!state.currentData.dismissedPackingTips.includes(key)) state.currentData.dismissedPackingTips.push(key);
+  persistCurrentTrip();
+  renderCurrentTab();
+}
+function dismissPackingTip(key){
+  if(!state.currentData.dismissedPackingTips.includes(key)) state.currentData.dismissedPackingTips.push(key);
+  persistCurrentTrip();
+  const box = document.getElementById('packingWeatherTip');
+  if(box) loadPackingWeatherTip();
+}
 function tripPhase(info, today){
   if(!info.startDate || !info.endDate) return 'unknown';
   if(today < info.startDate) return 'upcoming';
@@ -1545,9 +1641,11 @@ function renderPreparation(el){
  const d=state.currentData, pending=d.tasks.filter(t=>!t.done), done=d.tasks.filter(t=>t.done);
  const roots = d.packingLists.filter(l=>!l.parentId);
  el.innerHTML=`<div class="flex-head"><div><h2 class="section-title" style="margin-bottom:4px">Preparação</h2><div class="check-meta">Tarefas e malas são opcionais e funcionam totalmente offline.</div></div><button class="btn btn-primary" onclick="openTaskModal()">+ Tarefa</button></div>
+ <div class="list-card" id="packingWeatherTip" style="display:none; margin-top:20px;"></div>
  <div class="chart-row" style="margin-top:20px"><div class="list-card"><div class="flex-head"><h3 class="section-title">Falta tratar</h3></div>${renderTaskRows(pending)}${done.length?`<details style="margin-top:12px"><summary class="check-meta">${done.length} concluída(s)</summary>${renderTaskRows(done)}</details>`:''}</div>
  <div class="list-card" id="packingListsRoot"><div class="flex-head"><h3 class="section-title">Listas da mala</h3><button class="btn btn-sm" onclick="openPackingListModal('create')">+ Lista</button></div><div class="check-meta" style="margin-bottom:10px;">Arrasta o ⠿ de uma lista para dentro de outra para a tornar numa sub-lista.</div>${roots.map(l=>renderPackingList(l,0)).join('')}</div></div>`;
  bindPackingDragHandles();
+ loadPackingWeatherTip();
 }
 function packingChildren(listId){ return state.currentData.packingLists.filter(l=>l.parentId===listId); }
 function packingDescendants(listId){
@@ -2568,6 +2666,7 @@ function renderDespesas(el){
         <p>Isto já conta para o teu orçamento${totalBudget>0 ? ` — ${Math.round(bookingSpend/totalBudget*100)}% do total planeado` : ''}, mesmo antes de qualquer dia da viagem ter passado. Vale a pena rever o orçamento por categoria agora, enquanto ainda dá para ajustar.</p>
       </div>
     </div>` : ''}
+    <div class="list-card" id="fxRatesBox" style="display:none; margin-bottom:20px;"></div>
     <div class="stat-row">
       <div class="stat-card"><div class="label">Gasto total</div><div class="value ${totalBudget>0 && totalSpent>totalBudget?'over':''}">${fmtMoney(totalSpent, info.currency)}</div></div>
       <div class="stat-card"><div class="label">Orçamento restante</div><div class="value ${remaining<0?'over':'ok'}">${totalBudget>0 ? fmtMoney(remaining, info.currency) : '—'}</div></div>
@@ -2614,6 +2713,47 @@ function renderDespesas(el){
     renderDespesas(document.getElementById('panelContent'));
   });
   renderCategoryChart(allExpenses, info.currency, 'despCatChart', 'despCat');
+  loadCurrencyRatesCard();
+}
+
+function tripForeignCurrencyUsage(){
+  const tripCurrency = state.currentData.info.currency;
+  const counts = {};
+  (state.currentData.expenses||[]).forEach(e=>{
+    if(e.origCurrency && e.origCurrency!==tripCurrency) counts[e.origCurrency] = (counts[e.origCurrency]||0)+1;
+  });
+  return Object.entries(counts).sort((a,b)=>b[1]-a[1]).map(([code,count])=>({code,count}));
+}
+function formatFxRateLine(code, rate, tripCurrency){
+  // Moedas de valor muito baixo (ex: IDR, VND) ficam ilegíveis com "1 X = 0,0000 Y" — inverte-se a leitura.
+  if(rate < 0.01) return `1 ${tripCurrency} ≈ ${Math.round(1/rate).toLocaleString('pt-PT')} ${code}`;
+  const decimals = rate>=100 ? 0 : (rate>=1 ? 2 : 4);
+  return `1 ${code} = ${rate.toFixed(decimals)} ${tripCurrency}`;
+}
+async function loadCurrencyRatesCard(){
+  const box = document.getElementById('fxRatesBox');
+  if(!box) return;
+  const usage = tripForeignCurrencyUsage();
+  if(!usage.length){ box.style.display='none'; return; }
+  const tripCurrency = state.currentData.info.currency;
+  try{
+    const rows = (await Promise.all(usage.slice(0,6).map(u=>
+      getExchangeRate(u.code, tripCurrency).then(rate=>({...u, rate})).catch(()=>null)
+    ))).filter(Boolean);
+    const boxNow = document.getElementById('fxRatesBox');
+    if(!boxNow) return;
+    if(!rows.length){ boxNow.style.display='none'; return; }
+    boxNow.innerHTML = `
+      <div class="flex-head"><h3 class="section-title" style="font-size:15px; margin:0;">💱 Câmbio</h3></div>
+      <div class="check-meta" style="margin:2px 0 10px;">Moedas que já usaste nesta viagem (a viagem pode passar por vários países), convertidas para ${escapeHtml(tripCurrency)}.</div>
+      <div style="display:flex; flex-wrap:wrap; gap:10px;">
+        ${rows.map((r,i)=>`<div style="background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:10px 14px; min-width:160px;">
+          <div style="font:600 12.5px var(--font-mono); display:flex; align-items:center; gap:6px;">${escapeHtml(r.code)}${i===0?'<span class="badge">preferencial</span>':''}</div>
+          <div style="font:600 15px var(--font-display); margin-top:4px;">${escapeHtml(formatFxRateLine(r.code, r.rate, tripCurrency))}</div>
+        </div>`).join('')}
+      </div>`;
+    boxNow.style.display = '';
+  }catch(e){ /* offline ou API indisponível — o cartão fica escondido */ }
 }
 
 function renderTicket(e){
