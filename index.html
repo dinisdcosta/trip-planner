@@ -1911,10 +1911,17 @@ function expenseDayShares(e){
   const booking = e.bookingId ? (state.currentData.bookings||[]).find(b=>b.id===e.bookingId) : null;
   if(booking && booking.dateFrom){
     const from = booking.dateFrom;
-    const to = (booking.dateTo && booking.dateTo>=from) ? booking.dateTo : from;
+    // Alojamento: dateTo é o dia de check-out, não uma noite dormida — não entra na conta.
+    // Outras reservas de vários dias (seguro, etc.) cobrem o próprio dateTo por inteiro.
+    const hasRange = booking.dateTo && booking.dateTo>=from;
+    const to = hasRange ? booking.dateTo : from;
+    const exclusiveEnd = booking.category==='alojamento' && hasRange && to>from;
     const days = [];
     let cur = from;
-    while(cur<=to && days.length<60){ days.push(cur); cur = addDaysISO(cur,1); }
+    while(cur<=to && days.length<60){
+      if(exclusiveEnd && cur===to) break;
+      days.push(cur); cur = addDaysISO(cur,1);
+    }
     if(!days.length) days.push(from);
     const share = amount/days.length;
     return days.map(day=>({day, amount:share}));
