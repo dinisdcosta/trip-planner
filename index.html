@@ -1749,6 +1749,9 @@ function pctRangeSegments(s, e){
   if(e >= s) return [[s,e]];
   return [[s,100],[0,e]];
 }
+function pctRangesOverlap(a, b){
+  return a[0] < b[1] && b[0] < a[1];
+}
 const JETLAG_HOUR_MARKS = Array.from({length:25}, (_,i)=>i);
 function jetlagHourGridlines(){
   return JETLAG_HOUR_MARKS.map(h=>`<div class="jg-gridline${h%6===0?' jg-gridline-strong':''}" style="left:${(h/24)*100}%"></div>`).join('');
@@ -1804,9 +1807,14 @@ function jetlagGanttRow(d, advancing, journey, offsets, originOffset){
   markers.push(...flightVisuals.markers);
   const label = d.phase==='prep' ? 'antes' : isTravelDay ? 'viagem' : (isArrivalDay ? 'chegada' : 'destino');
   const stopsTxt = d.stops>0 ? ` (${d.stops} escala${d.stops>1?'s':''})` : '';
+  // Quando o período de sono recomendado cai em cima do próprio voo, deixa isso claro — não
+  // é um erro, é a sugestão de tentar dormir a bordo nessa janela; sem a nota parece que o
+  // gráfico está a mandar dormir a meio da viagem sem mais explicação.
+  const sleepOverlapsFlight = flightVisuals.segs.some(fs => sleepSegs.some(ss => pctRangesOverlap(fs.range, ss.range)));
+  const sleepNote = sleepOverlapsFlight ? ' · 💤 o período de sono cai durante o voo — tenta adiantá-lo a bordo, se o voo permitir' : '';
   let noteRow = '';
-  if(isTravelDay) noteRow = `<div class="jg-row jg-note-row"><div class="jg-row-label"></div><div class="jg-arrival-note">✈️ Ainda a caminho do destino final${stopsTxt}</div></div>`;
-  else if(isArrivalDay) noteRow = `<div class="jg-row jg-note-row"><div class="jg-row-label"></div><div class="jg-arrival-note">✈️ Chegas hoje ao destino final${stopsTxt}</div></div>`;
+  if(isTravelDay) noteRow = `<div class="jg-row jg-note-row"><div class="jg-row-label"></div><div class="jg-arrival-note">✈️ Ainda a caminho do destino final${stopsTxt}${sleepNote}</div></div>`;
+  else if(isArrivalDay) noteRow = `<div class="jg-row jg-note-row"><div class="jg-row-label"></div><div class="jg-arrival-note">✈️ Chegas hoje ao destino final${stopsTxt}${sleepNote}</div></div>`;
   return `<div class="jg-row">
     <div class="jg-row-label">${fmtDateShort(d.date)}<div class="jg-row-sub">${label}</div></div>
     <div class="jg-track">
