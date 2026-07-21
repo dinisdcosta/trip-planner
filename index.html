@@ -1280,12 +1280,39 @@ async function getDestinationCoords(){
     return {lat:info.destLat, lon:info.destLon, label};
   }catch(e){ return null; }
 }
+function datedLocationPoints(){
+  const d = state.currentData;
+  const points = [];
+  (d.locations||[]).forEach(l=>{
+    if(l.day && l.lat!=null && l.lon!=null) points.push({date:l.day, time:l.time||'12:00', lat:l.lat, lon:l.lon, label:l.name});
+  });
+  (d.bookings||[]).forEach(b=>{
+    const locId = b.arrivalLocationId || b.locationId;
+    const loc = locId && (d.locations||[]).find(l=>l.id===locId && l.lat!=null && l.lon!=null);
+    if(!loc) return;
+    if(b.dateFrom) points.push({date:b.dateFrom, time:b.timeFrom||'12:00', lat:loc.lat, lon:loc.lon, label:loc.name});
+    if(b.dateTo && b.dateTo!==b.dateFrom) points.push({date:b.dateTo, time:b.timeTo||'12:00', lat:loc.lat, lon:loc.lon, label:loc.name});
+  });
+  return points;
+}
 function coordsForDate(dateStr){
-  const candidates = (state.currentData.locations||[]).filter(l=>l.day===dateStr && l.lat!=null && l.lon!=null);
-  if(!candidates.length) return null;
-  candidates.sort((a,b)=>(a.time||'12:00').localeCompare(b.time||'12:00'));
-  const l = candidates[0];
-  return {lat:l.lat, lon:l.lon, label:l.name};
+  const points = datedLocationPoints();
+  if(!points.length) return null;
+  const exact = points.filter(p=>p.date===dateStr);
+  let pool = exact;
+  if(!pool.length){
+    const ref = new Date(dateStr+'T00:00:00');
+    let best=null, bestDiff=Infinity;
+    points.forEach(p=>{
+      const diff = Math.abs(new Date(p.date+'T00:00:00') - ref);
+      if(diff<bestDiff){ bestDiff=diff; best=p; }
+    });
+    pool = best ? [best] : [];
+  }
+  if(!pool.length) return null;
+  pool.sort((a,b)=>a.time.localeCompare(b.time));
+  const p = pool[0];
+  return {lat:p.lat, lon:p.lon, label:p.label};
 }
 let weatherCache = null;
 async function fetchWeatherForecast(lat, lon){
