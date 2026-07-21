@@ -363,6 +363,25 @@ select:focus, input:focus, textarea:focus{outline:2px solid var(--gold); outline
 /* ---------- Hoje, listas e módulos ---------- */
 .quick-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:22px}.quick-card,.list-card{background:var(--panel-alt);border:1px solid var(--border);border-radius:12px;padding:16px}.quick-card .kicker{font:11px var(--font-mono);text-transform:uppercase;letter-spacing:.07em;color:var(--text-dim)}.quick-card .big{font:600 20px var(--font-display);margin-top:6px}.flex-head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}.check-row{display:flex;align-items:flex-start;gap:11px;padding:12px 0;border-bottom:1px solid var(--border)}.check-row:last-child{border-bottom:0}.check-row.done{opacity:.58}.check-row.done .check-title{text-decoration:line-through}.round-check{width:24px;height:24px;border-radius:50%;border:1px solid var(--border);background:transparent;color:var(--sage);cursor:pointer;flex:0 0 auto}.round-check.checked{background:rgba(134,174,140,.14);border-color:var(--sage)}.check-main{flex:1;min-width:0}.check-title{font-weight:600;font-size:14px}.check-meta{color:var(--text-dim);font-size:12px;margin-top:3px;line-height:1.45}.badge{display:inline-flex;padding:3px 7px;border-radius:999px;background:rgba(201,162,77,.12);color:var(--gold);font:10.5px var(--font-mono);text-transform:uppercase}.module-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.offline-pill{display:inline-flex;align-items:center;gap:6px;font:10.5px var(--font-mono);color:var(--text-dim)}.offline-pill::before{content:'';width:7px;height:7px;border-radius:50%;background:var(--sage)}.offline-pill.offline::before{background:var(--coral)}
 .weather-strip{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:12px}.weather-day{text-align:center;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px 4px}.weather-day .wd-label{font:11px var(--font-mono);text-transform:uppercase;letter-spacing:.04em;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.weather-day .wd-place{font:600 9.5px var(--font-mono);text-transform:uppercase;letter-spacing:.03em;color:var(--gold);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px}.weather-day .wd-icon{font-size:22px;margin:6px 0}.weather-day .wd-temp{font:600 14px var(--font-display)}.weather-day .wd-min{color:var(--text-dim);font-weight:400;font-size:12px}@media (max-width:640px){.weather-strip{display:flex;overflow-x:auto;gap:8px;padding-bottom:4px;-webkit-overflow-scrolling:touch}.weather-day{flex:0 0 88px;padding:8px 4px}.weather-day .wd-label,.weather-day .wd-place{overflow:visible;white-space:normal}.weather-day .wd-icon{font-size:18px}}
+.jetlag-gantt{margin-top:12px; overflow-x:auto;}
+.jg-row{display:flex; align-items:center; gap:10px; margin-bottom:6px; min-width:520px;}
+.jg-row-label{flex:0 0 74px; font:11px var(--font-mono); color:var(--text-dim); text-transform:uppercase; letter-spacing:.03em; line-height:1.4;}
+.jg-row-sub{color:var(--gold); font-size:9.5px; text-transform:uppercase;}
+.jg-track{position:relative; flex:1; height:26px; background:var(--panel); border:1px solid var(--border); border-radius:6px;}
+.jg-track-flight{display:flex; align-items:center; padding:0 10px; font-size:12px; color:var(--text-dim); height:auto; min-height:26px;}
+.jg-seg{position:absolute; top:2px; bottom:2px; border-radius:3px;}
+.jg-seg.jg-sleep{background:#3B4A63; top:0; bottom:0; border-radius:0;}
+.jg-seg.jg-seek{background:rgba(201,162,77,.4); border:1px solid var(--gold); z-index:2;}
+.jg-seg.jg-avoid{background:repeating-linear-gradient(45deg, rgba(120,120,140,.25), rgba(120,120,140,.25) 4px, rgba(120,120,140,.08) 4px, rgba(120,120,140,.08) 8px); border:1px dashed var(--text-dim); z-index:2;}
+.jg-marker{position:absolute; top:-14px; transform:translateX(-50%); font-size:13px; z-index:3; cursor:default;}
+.jg-header-row .jg-track{background:transparent; border:none; height:16px;}
+.jg-ruler{position:relative;}
+.jg-hour-mark{position:absolute; top:0; font:9px var(--font-mono); color:var(--text-dim); transform:translateX(-50%);}
+.jg-legend{display:flex; flex-wrap:wrap; gap:12px; margin-top:10px; font-size:11px; color:var(--text-dim); align-items:center;}
+.jg-swatch{display:inline-block; width:12px; height:12px; border-radius:3px; margin-right:4px; vertical-align:-2px;}
+.jg-swatch.jg-sleep{background:#3B4A63;}
+.jg-swatch.jg-seek{background:rgba(201,162,77,.4); border:1px solid var(--gold);}
+.jg-swatch.jg-avoid{background:repeating-linear-gradient(45deg, rgba(120,120,140,.35), rgba(120,120,140,.35) 4px, rgba(120,120,140,.1) 4px, rgba(120,120,140,.1) 8px); border:1px dashed var(--text-dim);}
 @media(max-width:820px){.quick-grid{grid-template-columns:1fr}.module-grid{grid-template-columns:1fr}.mobile-primary{position:fixed;right:18px;bottom:18px;z-index:30;border-radius:999px;box-shadow:0 8px 24px rgba(0,0,0,.3)}}
 </style>
 </head>
@@ -1643,16 +1662,23 @@ function jetlagLightWindows(wake, bed, advancing){
     ? { seek:[wake, jetlagShiftTime(wake,2)], avoid:[jetlagShiftTime(bed,-2), bed] }
     : { seek:[jetlagShiftTime(bed,-3), bed], avoid:[wake, jetlagShiftTime(wake,2)] };
 }
+const JETLAG_MAX_ARRIVAL_DAYS = 2;
+const JETLAG_MAX_PREP_DAYS = 5;
 function computeJetlagPlan(journey, diffHours, wakeTime){
   const departDate = journey.firstLeg.dateFrom;
   const arriveDate = journey.lastLeg.dateTo || journey.lastLeg.dateFrom;
   const advancing = diffHours > 0;
-  const shiftPerDay = advancing ? 1 : 1.5;
+  // Taxas com apoio de melatonina + cafeína bem cronometradas (o máximo defensável na
+  // literatura, não é instantâneo). Prioriza-se adiantar o máximo possível ANTES de partir,
+  // para que o ajuste depois de chegar fique concluído em, no máximo, 2 dias.
+  const shiftPerDay = advancing ? 1.5 : 2;
   const totalShift = Math.min(Math.abs(diffHours), 12);
-  const prepDaysCount = Math.min(3, Math.ceil(totalShift/shiftPerDay));
+  const neededBeforeArrival = Math.max(0, totalShift - JETLAG_MAX_ARRIVAL_DAYS*shiftPerDay);
+  const prepDaysCount = Math.min(JETLAG_MAX_PREP_DAYS, Math.ceil(neededBeforeArrival/shiftPerDay));
   const doneByFlight = Math.min(totalShift, prepDaysCount*shiftPerDay);
   const remainingAtArrival = Math.max(0, totalShift - doneByFlight);
-  const arrivalDaysCount = remainingAtArrival>0 ? Math.min(7, Math.ceil(remainingAtArrival/shiftPerDay)) : 0;
+  const arrivalDaysCount = remainingAtArrival>0 ? Math.min(JETLAG_MAX_ARRIVAL_DAYS, Math.ceil(remainingAtArrival/shiftPerDay)) : 0;
+  const leftoverAfterPlan = Math.max(0, remainingAtArrival - arrivalDaysCount*shiftPerDay);
   const sleepDuration = 8;
   const days = [];
   for(let i=1;i<=prepDaysCount;i++){
@@ -1675,28 +1701,76 @@ function computeJetlagPlan(journey, diffHours, wakeTime){
     const bed = jetlagShiftTime(wake, -sleepDuration);
     days.push({date, phase:'arrival', wake, bed, ...jetlagLightWindows(wake,bed,advancing)});
   }
-  return {advancing, totalShift: Math.abs(diffHours), days};
+  return {advancing, totalShift: Math.abs(diffHours), leftoverAfterPlan, days};
+}
+function hhmmToPct(hhmm){
+  const [h,m] = hhmm.split(':').map(Number);
+  return ((h*60+m)/1440)*100;
+}
+function timeRangeSegments(startHHMM, endHHMM){
+  const s = hhmmToPct(startHHMM), e = hhmmToPct(endHHMM);
+  if(e >= s) return [[s,e]];
+  return [[s,100],[0,e]];
+}
+const JETLAG_HOUR_MARKS = [0,3,6,9,12,15,18,21,24];
+function jetlagGanttRow(d, advancing){
+  if(d.phase==='flight'){
+    const stopsNote = d.stops>0 ? ` · ${d.stops} escala${d.stops>1?'s':''}` : '';
+    return `<div class="jg-row">
+      <div class="jg-row-label">${fmtDateShort(d.date)}<div class="jg-row-sub">viagem</div></div>
+      <div class="jg-track jg-track-flight">✈️ Dia de viagem${stopsNote} — ajusta já o relógio para a hora do destino final</div>
+    </div>`;
+  }
+  const wakePct = hhmmToPct(d.wake), bedPct = hhmmToPct(d.bed);
+  // Normalmente o deitar (noite) fica depois do acordar (manhã) no relógio de 24h, e o sono
+  // "parte" o dia em dois bocados (fim da noite anterior + início desta noite). Mas com
+  // desvios grandes a hora de deitar pode cair já depois da meia-noite (ex: 01:30), antes
+  // da hora de acordar (09:30) — nesse caso o sono é um único bloco, sem dar a volta ao dia.
+  const sleepSegs = bedPct < wakePct
+    ? [{cls:'jg-sleep', range:[bedPct, wakePct]}]
+    : [{cls:'jg-sleep', range:[0, wakePct]}, {cls:'jg-sleep', range:[bedPct, 100]}];
+  const segs = [
+    ...sleepSegs,
+    ...timeRangeSegments(d.seek[0], d.seek[1]).map(r=>({cls:'jg-seek', range:r})),
+    ...timeRangeSegments(d.avoid[0], d.avoid[1]).map(r=>({cls:'jg-avoid', range:r})),
+  ];
+  const caffeineCutoff = jetlagShiftTime(d.bed, -6);
+  const markers = [{cls:'jg-caffeine', pct:hhmmToPct(caffeineCutoff), icon:'☕', title:`Evita cafeína a partir das ${caffeineCutoff}`}];
+  if(advancing) markers.push({cls:'jg-melatonin', pct:hhmmToPct(jetlagShiftTime(d.bed,-0.5)), icon:'💊', title:`Melatonina por volta das ${jetlagShiftTime(d.bed,-0.5)} (opcional, confirma com médico/farmacêutico)`});
+  const label = d.phase==='prep' ? 'antes' : 'destino';
+  return `<div class="jg-row">
+    <div class="jg-row-label">${fmtDateShort(d.date)}<div class="jg-row-sub">${label}</div></div>
+    <div class="jg-track">
+      ${segs.map(s=>`<div class="jg-seg ${s.cls}" style="left:${s.range[0]}%; width:${Math.max(0,s.range[1]-s.range[0])}%"></div>`).join('')}
+      ${markers.map(m=>`<div class="jg-marker ${m.cls}" style="left:${m.pct}%" title="${escapeHtml(m.title)}">${m.icon}</div>`).join('')}
+    </div>
+  </div>`;
+}
+function renderJetlagGantt(plan){
+  return `<div class="jetlag-gantt">
+    <div class="jg-row jg-header-row">
+      <div class="jg-row-label"></div>
+      <div class="jg-track jg-ruler">${JETLAG_HOUR_MARKS.map(h=>`<span class="jg-hour-mark" style="left:${(h/24)*100}%">${h}h</span>`).join('')}</div>
+    </div>
+    ${plan.days.map(d=>jetlagGanttRow(d, plan.advancing)).join('')}
+    <div class="jg-legend">
+      <span><i class="jg-swatch jg-sleep"></i>Dormir</span>
+      <span><i class="jg-swatch jg-seek"></i>Procura luz forte</span>
+      <span><i class="jg-swatch jg-avoid"></i>Evita luz forte</span>
+      <span>☕ Corte de cafeína</span>
+      ${plan.advancing ? `<span>💊 Melatonina (opcional)</span>` : ''}
+    </div>
+  </div>`;
 }
 function renderJetlagPlanHtml(journey, plan){
   const dirLabel = plan.advancing ? 'avançar — dormir e acordar mais cedo' : 'atrasar — dormir e acordar mais tarde';
-  const rows = plan.days.map(d=>{
-    if(d.phase==='flight'){
-      const stopsNote = d.stops>0 ? ` (inclui ${d.stops} escala${d.stops>1?'s':''})` : '';
-      return `<div class="check-row"><div style="font-size:18px">✈️</div><div class="check-main"><div class="check-title">${fmtDateShort(d.date)} · Dia de viagem${stopsNote}</div><div class="check-meta">Ajusta já o relógio para a hora do destino final; segue o horário-alvo tanto quanto possível a bordo.</div></div></div>`;
-    }
-    const label = d.phase==='prep' ? '🏠 Antes de partir' : '📍 Já no destino';
-    return `<div class="check-row"><div class="check-main">
-      <div class="check-title">${fmtDateShort(d.date)} · ${label}</div>
-      <div class="check-meta">Dormir ${d.bed} · Acordar ${d.wake}<br>☀️ Procura luz forte: ${d.seek[0]}–${d.seek[1]} &nbsp; 🌙 Evita luz forte: ${d.avoid[0]}–${d.avoid[1]}</div>
-    </div></div>`;
-  }).join('');
   return `
     <div class="flex-head"><h3 class="section-title" style="font-size:15px; margin:0;">🕐 Plano de ajuste de fuso — ${escapeHtml(journeyLabel(journey))}</h3>
       <button class="btn btn-sm" onclick="dismissJetlag('${journey.firstLeg.id}')">Desativar</button>
     </div>
-    <p class="check-meta" style="margin:4px 0 12px;">Diferença de ~${Math.round(plan.totalShift)}h entre a partida e o destino final — o objetivo é ${dirLabel}, aos poucos. Orientação geral baseada na ciência de resposta circadiana à luz (a mesma base usada por apps como a Timeshifter) — não substitui conselho médico.</p>
-    ${rows}
-    <p class="check-meta" style="margin-top:10px;">💊 Opcional: melatonina (~0,5mg) 30-60 min antes da nova hora de deitar — confirma com médico/farmacêutico antes de usar. ☕ Evita cafeína nas 6-8h antes de dormir.</p>
+    <p class="check-meta" style="margin:4px 0 12px;">Diferença de ~${Math.round(plan.totalShift)}h entre a partida e o destino final — o objetivo é ${dirLabel}, aos poucos, com o apoio de melatonina/cafeína bem cronometradas. Orientação geral baseada na ciência de resposta circadiana à luz (a mesma base usada por apps como a Timeshifter) — não substitui conselho médico.${plan.leftoverAfterPlan>0.4 ? ` Com um salto tão grande, é normal continuares a sentir algum desajuste depois destes dias.` : ''}</p>
+    ${renderJetlagGantt(plan)}
+    ${plan.advancing ? '' : `<p class="check-meta" style="margin-top:10px;">Nota: a evidência sobre melatonina é mais forte para adiantar o relógio (viajar para leste) do que para atrasar — por isso não é sugerida aqui.</p>`}
   `;
 }
 async function loadJetlagCard(){
