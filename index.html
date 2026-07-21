@@ -826,6 +826,7 @@ function blankTripData(info){
     budgetCategories: DEFAULT_CATEGORIES.map(c=>({id:c.key, key:c.key, label:c.label, icon:c.icon, color:c.color, planned:0})),
     tombstones: {locations:[], expenses:[], bookings:[], advances:[], people:[], tasks:[], packingLists:[], packingItems:[], budgetCategories:[]},
     dismissedPackingTips: [],
+    jetlagOptIn: {},
   };
 }
 const TOMBSTONE_KEYS = ['locations','expenses','bookings','advances','people','tasks','packingLists','packingItems','budgetCategories'];
@@ -848,6 +849,7 @@ function ensureShape(data){
   }
   if(!data.modules) data.modules = {today:true,locations:true,bookings:true,preparation:true,expenses:true,budget:true,dashboard:true};
   if(!Array.isArray(data.dismissedPackingTips)) data.dismissedPackingTips = [];
+  if(!data.jetlagOptIn || typeof data.jetlagOptIn!=='object') data.jetlagOptIn = {};
   if(!data.tombstones) data.tombstones = {};
   TOMBSTONE_KEYS.forEach(k=>{ if(!Array.isArray(data.tombstones[k])) data.tombstones[k] = []; });
   data.locations.forEach(l=>{
@@ -1562,6 +1564,150 @@ function dismissPackingTip(key){
   const box = document.getElementById('packingWeatherTip');
   if(box) loadPackingWeatherTip();
 }
+/* ============================= JETLAG ============================= */
+// Orientação geral (não é conselho médico) baseada na ciência de resposta circadiana à luz
+// usada por ferramentas como a Timeshifter: luz depois de acordar avança o relógio (útil ao
+// viajar para leste), luz antes de deitar atrasa-o (útil ao viajar para oeste). Só aparece
+// para voos com diferença horária grande, e é sempre opcional (o utilizador tem de ativar).
+const JETLAG_TZ_THRESHOLD_HOURS = 4;
+const tzOffsetCache = {};
+async function getUtcOffsetHours(lat, lon){
+  const key = `${lat.toFixed(2)},${lon.toFixed(2)}`;
+  const cached = tzOffsetCache[key];
+  if(cached && (Date.now()-cached.fetchedAt)<86400000) return cached.offset;
+  const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=weathercode&forecast_days=1&timezone=auto`);
+  if(!res.ok) throw new Error('tz fetch failed');
+  const json = await res.json();
+  const offset = (json.utc_offset_seconds||0)/3600;
+  tzOffsetCache[key] = {offset, fetchedAt:Date.now()};
+  return offset;
+}
+async function findJetlagCandidate(){
+  const today = todayLocalISO();
+  const flights = (state.currentData.bookings||[]).filter(b=>b.category==='voo' && b.dateFrom && b.locationId && b.arrivalLocationId);
+  let best = null, bestDayDiff = Infinity;
+  for(const b of flights){
+    if(state.currentData.jetlagOptIn[b.id]===false) continue;
+    const dayDiff = Math.abs(daysUntil(b.dateFrom, today));
+    if(dayDiff > 14) continue;
+    const from = getLocationById(b.locationId), to = getLocationById(b.arrivalLocationId);
+    if(!from || !to || from.lat==null || to.lat==null) continue;
+    try{
+      const [offA, offB] = await Promise.all([getUtcOffsetHours(from.lat, from.lon), getUtcOffsetHours(to.lat, to.lon)]);
+      let diff = offB - offA;
+      if(diff > 12) diff -= 24; if(diff < -12) diff += 24;
+      if(Math.abs(diff) < JETLAG_TZ_THRESHOLD_HOURS) continue;
+      if(dayDiff < bestDayDiff){ bestDayDiff = dayDiff; best = {booking:b, diffHours:diff}; }
+    }catch(e){ /* sem internet ou API indisponível — tenta o próximo voo */ }
+  }
+  return best;
+}
+function jetlagShiftTime(hhmm, deltaHours){
+  const [h,m] = (hhmm||'07:00').split(':').map(Number);
+  let total = Math.round((h*60+m) + deltaHours*60);
+  total = ((total % 1440) + 1440) % 1440;
+  return `${String(Math.floor(total/60)).padStart(2,'0')}:${String(total%60).padStart(2,'0')}`;
+}
+function jetlagLightWindows(wake, bed, advancing){
+  return advancing
+    ? { seek:[wake, jetlagShiftTime(wake,2)], avoid:[jetlagShiftTime(bed,-2), bed] }
+    : { seek:[jetlagShiftTime(bed,-3), bed], avoid:[wake, jetlagShiftTime(wake,2)] };
+}
+function computeJetlagPlan(booking, diffHours, wakeTime){
+  const advancing = diffHours > 0;
+  const shiftPerDay = advancing ? 1 : 1.5;
+  const totalShift = Math.min(Math.abs(diffHours), 12);
+  const prepDaysCount = Math.min(3, Math.ceil(totalShift/shiftPerDay));
+  const doneByFlight = Math.min(totalShift, prepDaysCount*shiftPerDay);
+  const remainingAtArrival = Math.max(0, totalShift - doneByFlight);
+  const arrivalDaysCount = remainingAtArrival>0 ? Math.min(7, Math.ceil(remainingAtArrival/shiftPerDay)) : 0;
+  const sleepDuration = 8;
+  const days = [];
+  for(let i=1;i<=prepDaysCount;i++){
+    const date = addDaysISO(booking.dateFrom, -(prepDaysCount-i+1));
+    const cumulative = Math.min(totalShift, i*shiftPerDay);
+    const wake = jetlagShiftTime(wakeTime, advancing ? -cumulative : cumulative);
+    const bed = jetlagShiftTime(wake, -sleepDuration);
+    days.push({date, phase:'prep', wake, bed, ...jetlagLightWindows(wake,bed,advancing)});
+  }
+  days.push({date: booking.dateFrom, phase:'flight'});
+  for(let j=1;j<=arrivalDaysCount;j++){
+    const date = addDaysISO(booking.dateTo || booking.dateFrom, j-1);
+    const remaining = Math.max(0, remainingAtArrival - (j-1)*shiftPerDay);
+    const wake = jetlagShiftTime(wakeTime, advancing ? remaining : -remaining);
+    const bed = jetlagShiftTime(wake, -sleepDuration);
+    days.push({date, phase:'arrival', wake, bed, ...jetlagLightWindows(wake,bed,advancing)});
+  }
+  return {advancing, totalShift: Math.abs(diffHours), days};
+}
+function renderJetlagPlanHtml(booking, plan){
+  const dirLabel = plan.advancing ? 'avançar — dormir e acordar mais cedo' : 'atrasar — dormir e acordar mais tarde';
+  const rows = plan.days.map(d=>{
+    if(d.phase==='flight'){
+      return `<div class="check-row"><div style="font-size:18px">✈️</div><div class="check-main"><div class="check-title">${fmtDateShort(d.date)} · Dia do voo</div><div class="check-meta">Ajusta já o relógio para a hora do destino; segue o horário-alvo tanto quanto possível a bordo.</div></div></div>`;
+    }
+    const label = d.phase==='prep' ? '🏠 Antes de partir' : '📍 Já no destino';
+    return `<div class="check-row"><div class="check-main">
+      <div class="check-title">${fmtDateShort(d.date)} · ${label}</div>
+      <div class="check-meta">Dormir ${d.bed} · Acordar ${d.wake}<br>☀️ Procura luz forte: ${d.seek[0]}–${d.seek[1]} &nbsp; 🌙 Evita luz forte: ${d.avoid[0]}–${d.avoid[1]}</div>
+    </div></div>`;
+  }).join('');
+  return `
+    <div class="flex-head"><h3 class="section-title" style="font-size:15px; margin:0;">🕐 Plano de ajuste de fuso — ${escapeHtml(booking.provider||'voo')}</h3>
+      <button class="btn btn-sm" onclick="dismissJetlag('${booking.id}')">Desativar</button>
+    </div>
+    <p class="check-meta" style="margin:4px 0 12px;">Diferença de ~${Math.round(plan.totalShift)}h — o objetivo é ${dirLabel}, aos poucos. Orientação geral baseada na ciência de resposta circadiana à luz (a mesma base usada por apps como a Timeshifter) — não substitui conselho médico.</p>
+    ${rows}
+    <p class="check-meta" style="margin-top:10px;">💊 Opcional: melatonina (~0,5mg) 30-60 min antes da nova hora de deitar — confirma com médico/farmacêutico antes de usar. ☕ Evita cafeína nas 6-8h antes de dormir.</p>
+  `;
+}
+async function loadJetlagCard(){
+  const box = document.getElementById('jetlagBox');
+  if(!box) return;
+  try{
+    const candidate = await findJetlagCandidate();
+    const boxNow = document.getElementById('jetlagBox');
+    if(!boxNow) return;
+    if(!candidate){ boxNow.style.display='none'; return; }
+    const { booking, diffHours } = candidate;
+    if(state.currentData.jetlagOptIn[booking.id]!==true){
+      const dir = diffHours>0 ? 'avançar' : 'atrasar';
+      boxNow.innerHTML = `
+        <div class="flex-head"><h3 class="section-title" style="font-size:15px; margin:0;">🕐 Fuso horário muito diferente neste voo</h3></div>
+        <p class="check-meta" style="margin:4px 0 12px;">${escapeHtml(booking.provider||'Este voo')} muda cerca de ${Math.round(Math.abs(diffHours))}h — o teu relógio biológico vai precisar de ${dir}. Posso gerar um plano orientativo de luz e sono para os dias antes/depois (ciência tipo Timeshifter, não é conselho médico). É opcional.</p>
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-primary btn-sm" onclick="openJetlagOptInModal('${booking.id}')">Criar plano</button>
+          <button class="btn btn-sm" onclick="dismissJetlag('${booking.id}')">Não, obrigado</button>
+        </div>`;
+      boxNow.style.display = '';
+      return;
+    }
+    const wakeTime = localStorage.getItem('travel-habitual-wake') || '07:00';
+    const plan = computeJetlagPlan(booking, diffHours, wakeTime);
+    boxNow.innerHTML = renderJetlagPlanHtml(booking, plan);
+    boxNow.style.display = '';
+  }catch(e){ /* offline ou API indisponível — o cartão fica escondido, sem quebrar a página */ }
+}
+function openJetlagOptInModal(bookingId){
+  const current = localStorage.getItem('travel-habitual-wake') || '07:00';
+  openModal(`<h3>Plano de ajuste de fuso</h3>
+    <div class="field"><label>A que horas costumas acordar normalmente?</label><input type="time" id="jetlag_wake" value="${current}"></div>
+    <p style="font-size:12px; color:var(--text-dim); line-height:1.5;">Vamos gerar um plano orientativo de sono e exposição à luz para os dias antes e depois deste voo, com base em ciência de ritmo circadiano publicada — não substitui conselho médico.</p>
+    <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" id="saveJetlagBtn">Criar plano</button></div>`);
+  document.getElementById('saveJetlagBtn').onclick=()=>{
+    const wake = document.getElementById('jetlag_wake').value || '07:00';
+    localStorage.setItem('travel-habitual-wake', wake);
+    state.currentData.jetlagOptIn[bookingId] = true;
+    persistCurrentTrip();
+    closeModal();
+    loadJetlagCard();
+  };
+}
+function dismissJetlag(bookingId){
+  state.currentData.jetlagOptIn[bookingId] = false;
+  persistCurrentTrip();
+  loadJetlagCard();
+}
 function tripPhase(info, today){
   if(!info.startDate || !info.endDate) return 'unknown';
   if(today < info.startDate) return 'upcoming';
@@ -1644,6 +1790,7 @@ function renderToday(el){
         </div>
       </div>
       ${renderFlightCheckinCard(getUpcomingFlightCheckins())}
+      <div class="list-card" id="jetlagBox" style="display:none; margin-top:18px;"></div>
       <div class="list-card" id="weatherBox" style="display:none; margin-top:18px;"></div>
       <div class="quick-grid">
         <div class="quick-card"><div class="kicker">Tarefas por fazer</div><div class="big">${urgent.length}</div></div>
@@ -1658,6 +1805,7 @@ function renderToday(el){
       <div class="list-card" style="margin-top:18px"><div class="flex-head"><h3 class="section-title">Ideias e locais por visitar</h3><button class="btn btn-sm" onclick="state.activeTab='roteiro';renderTabs();renderCurrentTab()">Ver todos</button></div>${ideas.length?ideas.map(renderInterestRow).join(''):'<div class="check-meta">Adiciona locais sem data para teres uma lista flexível de ideias.</div>'}</div>`;
     bindPackingDragHandles();
     loadAndRenderWeather(info.startDate, 'Previsão p/ chegada');
+    loadJetlagCard();
     return;
   }
 
@@ -1674,6 +1822,7 @@ function renderToday(el){
     el.innerHTML=`
       <div class="flex-head"><div><h2 class="section-title" style="margin-bottom:4px">Hoje · Dia ${dayNum} de ${totalDays}</h2><div style="color:var(--text-dim);font-size:13px">${fmtDateShort(today)} — o que precisas de saber hoje.</div></div><button class="btn btn-primary" onclick="openLocationModal('create')">+ Guardar local</button></div>
       ${renderFlightCheckinCard(getUpcomingFlightCheckins())}
+      <div class="list-card" id="jetlagBox" style="display:none; margin-top:18px;"></div>
       <div class="list-card" id="weatherBox" style="display:none; margin-top:18px;"></div>
       <div class="quick-grid" style="margin-top:18px">
         <div class="quick-card"><div class="kicker">Compromissos hoje</div><div class="big">${todayAgenda.length}</div></div>
@@ -1688,6 +1837,7 @@ function renderToday(el){
       <div class="list-card" style="margin-top:18px"><div class="flex-head"><h3 class="section-title">Amanhã</h3></div>${tomorrowAgenda.length?tomorrowAgenda.map(renderAgendaRow).join(''):'<div class="check-meta">Nada marcado para amanhã ainda.</div>'}</div>
       <div class="list-card" style="margin-top:18px"><div class="flex-head"><h3 class="section-title">Ideias e locais por visitar</h3><button class="btn btn-sm" onclick="state.activeTab='roteiro';renderTabs();renderCurrentTab()">Ver todos</button></div>${ideas.length?ideas.map(renderInterestRow).join(''):'<div class="check-meta">Adiciona locais sem data para teres uma lista flexível de ideias.</div>'}</div>`;
     loadAndRenderWeather(today, 'Tempo hoje');
+    loadJetlagCard();
     return;
   }
 
