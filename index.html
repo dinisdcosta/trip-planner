@@ -162,6 +162,11 @@ select:focus, input:focus, textarea:focus{outline:2px solid var(--gold); outline
   position:relative; width:100%; aspect-ratio:784/510; border-radius:12px; overflow:hidden;
   border:1px solid var(--border); background:var(--bg-alt); isolation:isolate;
 }
+.map-canvas.map-fullscreen{
+  position:fixed; inset:14px; width:auto; height:auto; aspect-ratio:auto; z-index:200;
+  box-shadow:0 20px 60px rgba(0,0,0,.5);
+}
+.map-fullscreen-backdrop{position:fixed; inset:0; background:rgba(4,8,14,.75); z-index:199;}
 .map-canvas .leaflet-container{ background:var(--bg-alt); font-family:var(--font-body); }
 .map-credit{font-size:10.5px; color:var(--text-dim); opacity:.7; margin-top:4px;}
 .map-pin{ cursor:pointer; }
@@ -190,6 +195,11 @@ select:focus, input:focus, textarea:focus{outline:2px solid var(--gold); outline
 .pin-tip .pin-tip-cat{font-family:var(--font-mono); font-size:9.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--gold); margin-bottom:2px;}
 .pin-tip .pin-tip-title{font-family:var(--font-display); font-size:13.5px; font-weight:600; color:var(--text); white-space:normal;}
 .pin-tip .pin-tip-meta{font-size:11px; color:var(--text-dim); margin-top:2px;}
+.route-arrow{display:flex; align-items:center; justify-content:center; pointer-events:none;}
+.route-arrow span{
+  display:flex; align-items:center; justify-content:center; width:18px; height:18px; border-radius:50%;
+  background:#C9A24D; color:#20160A; font-size:11px; box-shadow:0 1px 4px rgba(0,0,0,.5); border:1.5px solid var(--bg-alt);
+}
 .map-empty-hint{
   position:absolute; inset:0; display:flex; align-items:center; justify-content:center; text-align:center;
   color:var(--text-dim); font-size:13.5px; padding:30px; pointer-events:none; z-index:400;
@@ -1675,7 +1685,7 @@ function renderRoteiro(el){
   } else {
     el.innerHTML = `
       <div class="flex-head"><div><h2 class="section-title" style="margin-bottom:4px">Roteiro &amp; percurso</h2><div class="check-meta">Reservas, transportes, alojamentos e locais aparecem juntos por data e hora. A hora é sempre opcional.</div></div><div style="display:flex;gap:8px"><button class="btn btn-sm" onclick="openBookingModal('create')">+ Reserva</button><button class="btn btn-sm btn-primary" onclick="openLocationModal('create')">+ Local</button></div></div>
-      <div class="itin-layout" style="margin-top:18px"><div><div id="itinList">${listHtml}</div></div><div><div id="mapCanvas" class="map-canvas"></div><div class="map-legend-swatches">${mapLegendSwatches()}</div><div class="map-legend">Passa o rato num pin para o identificar, clica para detalhes e para editar, ou arrasta para afinar a posição — a morada atualiza-se sozinha. O botão 📥 guarda esta zona do mapa para veres offline.</div><div class="map-credit">Mapa: © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors</div></div></div>`;
+      <div class="itin-layout" style="margin-top:18px"><div><div id="itinList">${listHtml}</div></div><div><div id="mapCanvas" class="map-canvas"></div><div class="map-legend-swatches">${mapLegendSwatches()}</div><div class="map-legend">Passa o rato num pin para o identificar, clica para detalhes e para editar, ou arrasta para afinar a posição — a morada atualiza-se sozinha. A linha tracejada segue a ordem cronológica do roteiro (mesma numeração dos pins), não a distância — as setas mostram o sentido. ⛶ abre o mapa em ecrã inteiro, 📥 guarda esta zona para offline.</div><div class="map-credit">Mapa: © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors</div></div></div>`;
   }
   renderMapCanvas();
   const pinned = state.currentData.locations.filter(l=>l.lat!=null && l.lon!=null);
@@ -1712,6 +1722,21 @@ function renderLocItem(loc){
 let leafletMapInstance = null;
 let leafletMarkers = new Map();
 let leafletRouteLine = null;
+let leafletRouteArrows = [];
+function computeBearing(lat1, lon1, lat2, lon2){
+  const toRad = d=>d*Math.PI/180, toDeg = r=>r*180/Math.PI;
+  const phi1=toRad(lat1), phi2=toRad(lat2), dLon=toRad(lon2-lon1);
+  const y = Math.sin(dLon)*Math.cos(phi2);
+  const x = Math.cos(phi1)*Math.sin(phi2) - Math.sin(phi1)*Math.cos(phi2)*Math.cos(dLon);
+  return (toDeg(Math.atan2(y,x))+360)%360;
+}
+function buildRouteArrowIcon(bearing){
+  return L.divIcon({
+    className:'route-arrow',
+    html:`<span style="transform:rotate(${bearing-90}deg);">➤</span>`,
+    iconSize:[16,16], iconAnchor:[8,8],
+  });
+}
 
 function popoverHtmlFor(loc){
   const spend = state.currentData.expenses.filter(e=>e.locationId===loc.id).reduce((s,e)=>s+Number(e.amount||0),0);
@@ -1843,6 +1868,37 @@ const MapDownloadControl = (typeof L!=='undefined') ? L.Control.extend({
     return btn;
   }
 }) : null;
+function toggleMapFullscreen(){
+  const wrap = document.getElementById('mapCanvas');
+  if(!wrap) return;
+  const isFull = wrap.classList.toggle('map-fullscreen');
+  let backdrop = document.getElementById('mapFullscreenBackdrop');
+  if(isFull){
+    if(!backdrop){
+      backdrop = document.createElement('div');
+      backdrop.id = 'mapFullscreenBackdrop';
+      backdrop.className = 'map-fullscreen-backdrop';
+      backdrop.onclick = ()=>toggleMapFullscreen();
+      document.body.appendChild(backdrop);
+    }
+    document.addEventListener('keydown', mapFullscreenEscHandler);
+  } else {
+    if(backdrop) backdrop.remove();
+    document.removeEventListener('keydown', mapFullscreenEscHandler);
+  }
+  setTimeout(()=>{ if(leafletMapInstance) leafletMapInstance.invalidateSize(); }, 60);
+}
+function mapFullscreenEscHandler(e){ if(e.key==='Escape') toggleMapFullscreen(); }
+const MapFullscreenControl = (typeof L!=='undefined') ? L.Control.extend({
+  options:{position:'topright'},
+  onAdd:function(){
+    const btn = L.DomUtil.create('button', 'leaflet-bar map-zoom-btn map-fit-btn');
+    btn.type='button'; btn.title='Ecrã inteiro'; btn.innerHTML='⛶';
+    L.DomEvent.disableClickPropagation(btn);
+    L.DomEvent.on(btn,'click', ()=>toggleMapFullscreen());
+    return btn;
+  }
+}) : null;
 const MapFitControl = (typeof L!=='undefined') ? L.Control.extend({
   options:{position:'bottomright'},
   onAdd:function(){
@@ -1874,6 +1930,7 @@ function renderMapCanvas(){
     L.control.zoom({position:'bottomright'}).addTo(leafletMapInstance);
     if(MapFitControl) leafletMapInstance.addControl(new MapFitControl());
     if(MapDownloadControl) leafletMapInstance.addControl(new MapDownloadControl());
+    if(MapFullscreenControl) leafletMapInstance.addControl(new MapFullscreenControl());
   }
 
   const currentIds = new Set(locs.map(l=>l.id));
@@ -1899,8 +1956,20 @@ function renderMapCanvas(){
   });
 
   if(leafletRouteLine){ leafletMapInstance.removeLayer(leafletRouteLine); leafletRouteLine=null; }
+  leafletRouteArrows.forEach(a=>leafletMapInstance.removeLayer(a));
+  leafletRouteArrows = [];
   if(latlngs.length>1){
     leafletRouteLine = L.polyline(latlngs, {color:'#C9A24D', weight:2.5, dashArray:'6,7', opacity:0.75}).addTo(leafletMapInstance);
+    // Setas a meio de cada troço, na ordem cronológica (mesma numeração dos pins),
+    // para ficar claro que a linha segue a sequência do roteiro e não a distância.
+    for(let i=0; i<latlngs.length-1; i++){
+      const [lat1,lon1] = latlngs[i], [lat2,lon2] = latlngs[i+1];
+      const midLat = (lat1+lat2)/2, midLon = (lon1+lon2)/2;
+      const bearing = computeBearing(lat1,lon1,lat2,lon2);
+      const arrow = L.marker([midLat,midLon], {icon:buildRouteArrowIcon(bearing), interactive:false, keyboard:false});
+      arrow.addTo(leafletMapInstance);
+      leafletRouteArrows.push(arrow);
+    }
   }
 
   let hintEl = wrap.querySelector('.map-empty-hint');
@@ -1969,7 +2038,63 @@ function deleteLocation(id){
 /* ============================= RESERVAS (carteira de viagem) ============================= */
 function renderReservas(el){
   const bookings=[...(state.currentData.bookings||[])].sort((a,b)=>bookingSortKey(a).localeCompare(bookingSortKey(b)));
-  el.innerHTML=`<div class="flex-head"><div><h2 class="section-title" style="margin-bottom:4px">Reservas</h2><div class="check-meta">Ordenadas por data e hora. Cada reserva pode ficar associada a um local e aparece automaticamente no roteiro.</div></div><button class="btn btn-primary" onclick="openBookingModal('create')">+ Adicionar reserva</button></div><div id="bookingList" style="margin-top:18px">${bookings.length?bookings.map(renderBookingTicket).join(''):'<p style="color:var(--text-dim);font-size:14px">Ainda não tens reservas guardadas.</p>'}</div>`;
+  el.innerHTML=`<div class="flex-head"><div><h2 class="section-title" style="margin-bottom:4px">Reservas</h2><div class="check-meta">Ordenadas por data e hora. Cada reserva pode ficar associada a um local e aparece automaticamente no roteiro.</div></div><div style="display:flex; gap:8px;">${bookings.length?`<button class="btn btn-sm" onclick="printReservations()">🖨️ Imprimir / PDF</button>`:''}<button class="btn btn-primary" onclick="openBookingModal('create')">+ Adicionar reserva</button></div></div><div id="bookingList" style="margin-top:18px">${bookings.length?bookings.map(renderBookingTicket).join(''):'<p style="color:var(--text-dim);font-size:14px">Ainda não tens reservas guardadas.</p>'}</div>`;
+}
+function printReservations(){
+  const bookings = [...(state.currentData.bookings||[])].sort((a,b)=>bookingSortKey(a).localeCompare(bookingSortKey(b)));
+  if(!bookings.length){ alert('Ainda não tens reservas guardadas.'); return; }
+  const info = state.currentData.info;
+  const cards = bookings.map(b=>{
+    const c = BOOKING_CATEGORIES.find(x=>x.key===b.category)||BOOKING_CATEGORIES[4];
+    const where = bookingLocationText(b);
+    const sameDay = b.dateTo && b.dateTo===b.dateFrom;
+    return `
+      <div class="pcard">
+        <div class="pcard-head">
+          <span class="pcard-icon">${c.icon}</span>
+          <div>
+            <div class="pcard-title">${escapeHtml(b.provider||c.label)}${b.flightNumber?' · '+escapeHtml(b.flightNumber):''}</div>
+            <div class="pcard-sub">${escapeHtml(c.label)}</div>
+          </div>
+          ${b.code?`<div class="pcard-code">${escapeHtml(b.code)}</div>`:''}
+        </div>
+        <div class="pcard-grid">
+          <div><span class="pcard-label">Data</span><br>${b.dateFrom?fmtDateShort(b.dateFrom):'—'}${b.timeFrom?' · '+escapeHtml(b.timeFrom):''}</div>
+          ${b.dateTo && !sameDay ? `<div><span class="pcard-label">Até</span><br>${fmtDateShort(b.dateTo)}${b.timeTo?' · '+escapeHtml(b.timeTo):''}</div>` : (b.timeTo?`<div><span class="pcard-label">Chegada</span><br>${escapeHtml(b.timeTo)}</div>`:'')}
+          ${where?`<div><span class="pcard-label">Local</span><br>${escapeHtml(where)}</div>`:''}
+          ${b.departureTerminal?`<div><span class="pcard-label">Terminal partida</span><br>${escapeHtml(b.departureTerminal)}</div>`:''}
+          ${b.arrivalTerminal?`<div><span class="pcard-label">Terminal chegada</span><br>${escapeHtml(b.arrivalTerminal)}</div>`:''}
+        </div>
+        ${b.notes?`<div class="pcard-notes">${escapeHtml(b.notes)}</div>`:''}
+      </div>`;
+  }).join('');
+  const html = `<!doctype html><html lang="pt-PT"><head><meta charset="UTF-8"><title>Reservas — ${escapeHtml(info.name||'Viagem')}</title>
+  <style>
+    body{font-family:'Helvetica Neue',Arial,sans-serif; color:#1a1a1a; margin:0; padding:24px;}
+    h1{font-size:20px; margin:0 0 2px;}
+    .psub{color:#666; font-size:12.5px; margin-bottom:22px;}
+    .pcard{border:1px solid #ccc; border-radius:8px; padding:12px 14px; margin-bottom:12px; break-inside:avoid;}
+    .pcard-head{display:flex; align-items:center; gap:10px; margin-bottom:8px;}
+    .pcard-icon{font-size:20px;}
+    .pcard-title{font-weight:700; font-size:14.5px;}
+    .pcard-sub{font-size:11px; color:#666; text-transform:uppercase; letter-spacing:.04em;}
+    .pcard-code{margin-left:auto; font-family:'Courier New',monospace; font-size:13px; border:1px dashed #999; border-radius:5px; padding:2px 8px; white-space:nowrap;}
+    .pcard-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:8px 14px; font-size:12.5px;}
+    .pcard-label{color:#888; font-size:10px; text-transform:uppercase; letter-spacing:.04em;}
+    .pcard-notes{margin-top:8px; padding-top:8px; border-top:1px dashed #ddd; font-size:12px; color:#444;}
+    @media print{ body{padding:8mm;} .pcard{box-shadow:none;} }
+  </style></head>
+  <body>
+    <h1>${escapeHtml(info.name||'Viagem')}</h1>
+    <div class="psub">${escapeHtml(info.destination||'')}${info.startDate?' · '+fmtDateShort(info.startDate):''}${info.endDate?' → '+fmtDateShort(info.endDate):''} · ${bookings.length} reserva(s)</div>
+    ${cards}
+  </body></html>`;
+  const win = window.open('', '_blank');
+  if(!win){ alert('O browser bloqueou a janela de impressão. Permite pop-ups para este site e tenta novamente.'); return; }
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+  setTimeout(()=>{ try{ win.focus(); win.print(); }catch(e){} }, 300);
 }
 function renderBookingTicket(b){
   const c=BOOKING_CATEGORIES.find(x=>x.key===b.category)||BOOKING_CATEGORIES[4];
