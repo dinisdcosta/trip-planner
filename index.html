@@ -375,7 +375,9 @@ select:focus, input:focus, textarea:focus{outline:2px solid var(--gold); outline
 .jg-seg.jg-sleep{background:#3B4A63; top:0; bottom:0; border-radius:0;}
 .jg-seg.jg-seek{background:rgba(201,162,77,.4); border:1px solid var(--gold); z-index:2;}
 .jg-seg.jg-avoid{background:repeating-linear-gradient(45deg, rgba(120,120,140,.25), rgba(120,120,140,.25) 4px, rgba(120,120,140,.08) 4px, rgba(120,120,140,.08) 8px); border:1px dashed var(--text-dim); z-index:2;}
+.jg-seg.jg-flight{top:auto; bottom:0; height:4px; border-radius:2px; background:#6C6FD1; border:none; z-index:4;}
 .jg-marker{position:absolute; top:-14px; transform:translateX(-50%); font-size:13px; z-index:3; cursor:default;}
+.jg-marker.jg-flight-marker{top:auto; bottom:-15px; font-size:11px;}
 .jg-header-row .jg-track{background:transparent; border:none; height:16px; overflow:visible;}
 .jg-header-row.jg-ruler-bottom{margin-top:4px;}
 .jg-ruler-caption{font-size:9px; opacity:.75;}
@@ -389,6 +391,7 @@ select:focus, input:focus, textarea:focus{outline:2px solid var(--gold); outline
 .jg-swatch.jg-sleep{background:#3B4A63;}
 .jg-swatch.jg-seek{background:rgba(201,162,77,.4); border:1px solid var(--gold);}
 .jg-swatch.jg-avoid{background:repeating-linear-gradient(45deg, rgba(120,120,140,.35), rgba(120,120,140,.35) 4px, rgba(120,120,140,.1) 4px, rgba(120,120,140,.1) 8px); border:1px dashed var(--text-dim);}
+.jg-swatch.jg-flight{background:#6C6FD1; height:4px; vertical-align:1px;}
 @media(max-width:820px){.quick-grid{grid-template-columns:1fr}.module-grid{grid-template-columns:1fr}.mobile-primary{position:fixed;right:18px;bottom:18px;z-index:30;border-radius:999px;box-shadow:0 8px 24px rgba(0,0,0,.3)}}
 </style>
 </head>
@@ -1731,11 +1734,39 @@ function timeRangeSegments(startHHMM, endHHMM){
   if(e >= s) return [[s,e]];
   return [[s,100],[0,e]];
 }
+function pctRangeSegments(s, e){
+  if(e >= s) return [[s,e]];
+  return [[s,100],[0,e]];
+}
 const JETLAG_HOUR_MARKS = Array.from({length:25}, (_,i)=>i);
 function jetlagHourGridlines(){
   return JETLAG_HOUR_MARKS.map(h=>`<div class="jg-gridline${h%6===0?' jg-gridline-strong':''}" style="left:${(h/24)*100}%"></div>`).join('');
 }
-function jetlagGanttRow(d, advancing){
+function jetlagFlightVisualsForDate(journey, date, diffHours, isFinalArrivalDay){
+  const segs = [], markers = [];
+  if(!journey) return {segs, markers};
+  journey.legs.forEach((leg, i)=>{
+    const isLastLeg = i===journey.legs.length-1;
+    const depDate = leg.dateFrom, arrDate = leg.dateTo || leg.dateFrom;
+    const depPct = leg.timeFrom ? hhmmToPct(leg.timeFrom) : null;
+    // A chegada do último voo já está em hora do destino — converte-a para a mesma posição
+    // do eixo (equivalente em hora de origem) tal como a régua "destino" faz, para encaixar
+    // no mesmo gráfico. As restantes chegadas ficam na hora local da própria escala.
+    const arrPct = leg.timeTo ? hhmmToPct((isLastLeg && isFinalArrivalDay) ? jetlagShiftTime(leg.timeTo, -diffHours) : leg.timeTo) : null;
+    const departsToday = depDate===date && depPct!=null;
+    const arrivesToday = arrDate===date && arrPct!=null;
+    if(departsToday && arrivesToday){
+      pctRangeSegments(depPct, arrPct).forEach(r=>segs.push({cls:'jg-flight', range:r}));
+    } else {
+      if(departsToday) segs.push({cls:'jg-flight', range:[depPct,100]});
+      if(arrivesToday) segs.push({cls:'jg-flight', range:[0,arrPct]});
+    }
+    if(departsToday) markers.push({cls:'jg-flight-marker', pct:depPct, icon:'🛫', title:`${leg.provider||'Voo'} parte às ${leg.timeFrom}`});
+    if(arrivesToday) markers.push({cls:'jg-flight-marker', pct:arrPct, icon:'🛬', title:`${leg.provider||'Voo'} chega às ${leg.timeTo}`});
+  });
+  return {segs, markers};
+}
+function jetlagGanttRow(d, advancing, journey, diffHours){
   const wakePct = hhmmToPct(d.wake), bedPct = hhmmToPct(d.bed);
   // Normalmente o deitar (noite) fica depois do acordar (manhã) no relógio de 24h, e o sono
   // "parte" o dia em dois bocados (fim da noite anterior + início desta noite). Mas com
@@ -1756,6 +1787,9 @@ function jetlagGanttRow(d, advancing){
   if(advancing) markers.push({cls:'jg-melatonin', pct:hhmmToPct(jetlagShiftTime(d.bed,-1.5)), icon:'💊', title:`Melatonina por volta das ${jetlagShiftTime(d.bed,-1.5)} — cerca de 1h30 antes de deitar (opcional, confirma com médico/farmacêutico)`});
   const isTravelDay = d.phase==='travel';
   const isArrivalDay = d.phase==='arrival' && d.stops!=null;
+  const flightVisuals = jetlagFlightVisualsForDate(journey, d.date, diffHours, isArrivalDay);
+  segs.push(...flightVisuals.segs);
+  markers.push(...flightVisuals.markers);
   const label = d.phase==='prep' ? 'antes' : isTravelDay ? 'viagem' : (isArrivalDay ? 'chegada' : 'destino');
   const stopsTxt = d.stops>0 ? ` (${d.stops} escala${d.stops>1?'s':''})` : '';
   let noteRow = '';
@@ -1776,23 +1810,31 @@ function formatJetlagHourMark(h){
   const frac = wrapped - whole;
   return frac < 0.01 ? `${whole}` : `${whole}:${String(Math.round(frac*60)).padStart(2,'0')}`;
 }
-function renderJetlagGantt(plan){
+function jetlagHourMarkStyle(pct){
+  // Nas pontas (0h e 24h) centrar o texto (translateX -50%) empurra metade para fora da
+  // faixa e corta-o — ancora-se pelo lado interior nessas duas marcas.
+  if(pct<=0.01) return `left:0%; transform:translateX(0)`;
+  if(pct>=99.99) return `left:100%; transform:translateX(-100%)`;
+  return `left:${pct}%;`;
+}
+function renderJetlagGantt(plan, journey){
   const originMarks = JETLAG_HOUR_MARKS.map(h=>({pct:(h/24)*100, label:h, strong:h%6===0}));
   const destMarks = JETLAG_HOUR_MARKS.map(h=>({pct:(h/24)*100, label:formatJetlagHourMark(h+plan.diffHours), strong:h%6===0}));
   return `<div class="jetlag-gantt">
     <div class="jg-row jg-header-row">
       <div class="jg-row-label jg-ruler-caption">origem</div>
-      <div class="jg-track jg-ruler">${originMarks.map(m=>`<span class="jg-hour-mark${m.strong?' jg-hour-mark-strong':''}" style="left:${m.pct}%">${m.label}</span>`).join('')}</div>
+      <div class="jg-track jg-ruler">${originMarks.map(m=>`<span class="jg-hour-mark${m.strong?' jg-hour-mark-strong':''}" style="${jetlagHourMarkStyle(m.pct)}">${m.label}</span>`).join('')}</div>
     </div>
-    ${plan.days.map(d=>jetlagGanttRow(d, plan.advancing)).join('')}
+    ${plan.days.map(d=>jetlagGanttRow(d, plan.advancing, journey, plan.diffHours)).join('')}
     <div class="jg-row jg-header-row jg-ruler-bottom">
       <div class="jg-row-label jg-ruler-caption">destino</div>
-      <div class="jg-track jg-ruler">${destMarks.map(m=>`<span class="jg-hour-mark${m.strong?' jg-hour-mark-strong':''}" style="left:${m.pct}%">${m.label}</span>`).join('')}</div>
+      <div class="jg-track jg-ruler">${destMarks.map(m=>`<span class="jg-hour-mark${m.strong?' jg-hour-mark-strong':''}" style="${jetlagHourMarkStyle(m.pct)}">${m.label}</span>`).join('')}</div>
     </div>
     <div class="jg-legend">
       <span><i class="jg-swatch jg-sleep"></i>Dormir</span>
       <span><i class="jg-swatch jg-seek"></i>Procura luz forte</span>
       <span><i class="jg-swatch jg-avoid"></i>Evita luz forte</span>
+      <span><i class="jg-swatch jg-flight"></i>Voo (🛫 parte · 🛬 chega)</span>
       <span>☕ Corte de cafeína</span>
       ${plan.advancing ? `<span>💊 Melatonina (opcional)</span>` : ''}
     </div>
@@ -1805,7 +1847,7 @@ function renderJetlagPlanHtml(journey, plan){
       <button class="btn btn-sm" onclick="dismissJetlag('${journey.firstLeg.id}')">Desativar</button>
     </div>
     <p class="check-meta" style="margin:4px 0 12px;">Diferença de ~${Math.round(plan.totalShift)}h entre a partida e o destino final — o objetivo é ${dirLabel}, aos poucos, com o apoio de melatonina/cafeína bem cronometradas. Orientação geral baseada na ciência de resposta circadiana à luz (a mesma base usada por apps como a Timeshifter) — não substitui conselho médico.${plan.leftoverAfterPlan>0.4 ? ` Com um salto tão grande, é normal continuares a sentir algum desajuste depois destes dias.` : ''}</p>
-    ${renderJetlagGantt(plan)}
+    ${renderJetlagGantt(plan, journey)}
     ${plan.advancing ? '' : `<p class="check-meta" style="margin-top:10px;">Nota: a evidência sobre melatonina é mais forte para adiantar o relógio (viajar para leste) do que para atrasar — por isso não é sugerida aqui.</p>`}
   `;
 }
