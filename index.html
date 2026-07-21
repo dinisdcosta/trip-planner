@@ -1799,10 +1799,63 @@ function renderDashboard(el){
         <canvas id="dayChart"></canvas>
       </div>
     </div>
+
+    <div class="list-card" style="margin-top:20px;">
+      <h3 class="section-title" style="margin-bottom:6px;">Despesas por dia</h3>
+      <p style="color:var(--text-dim); font-size:12.5px; margin:0 0 6px;">Inclui a quota diária de despesas que cobrem vários dias (ex: seguro de viagem, alojamento).</p>
+      ${renderDayByDayExpenses()}
+    </div>
   `;
 
   renderCategoryChart(expenses, info.currency);
   renderDayChart(expenses, info.currency);
+}
+
+function expensesByDay(){
+  const map = {};
+  state.currentData.expenses.forEach(e=>{
+    expenseDayShares(e).forEach(({day,amount})=>{
+      (map[day] = map[day]||[]).push({expense:e, amount});
+    });
+  });
+  return map;
+}
+
+function renderDayExpenseRow({expense:e, amount}){
+  const c = catInfo(e.categoryKey);
+  const currency = state.currentData.info.currency;
+  const full = Number(e.amount||0);
+  const partial = Math.abs(amount-full) > 0.005;
+  const booking = (state.currentData.bookings||[]).find(b=>b.id===e.bookingId);
+  const payerName = e.paidBy ? personName(e.paidBy) : null;
+  return `<div class="check-row">
+    <div style="font-size:18px">${c.icon}</div>
+    <div class="check-main">
+      <div class="check-title">${escapeHtml(e.description || c.label)}</div>
+      <div class="check-meta">${c.label}${booking ? ' · '+escapeHtml(booking.provider||'Reserva') : ''}${payerName ? ' · por '+escapeHtml(payerName) : ''}${partial ? ` · quota diária de ${fmtMoney(full, currency)} (despesa de vários dias)` : ''}</div>
+    </div>
+    <div style="font:600 13px var(--font-mono); white-space:nowrap;">${fmtMoney(amount, currency)}</div>
+  </div>`;
+}
+
+function renderDayByDayExpenses(){
+  const byDay = expensesByDay();
+  const days = Object.keys(byDay).sort();
+  if(!days.length) return `<p style="color:var(--text-dim); font-size:13px;">Ainda sem despesas registadas.</p>`;
+  const today = todayLocalISO();
+  const currency = state.currentData.info.currency;
+  return days.map(day=>{
+    const entries = byDay[day].sort((a,b)=>(a.expense.time||'').localeCompare(b.expense.time||''));
+    const total = entries.reduce((s,x)=>s+x.amount,0);
+    const label = day==='sem data' ? 'Sem data' : fmtDateShort(day);
+    return `<details ${day===today?'open':''} style="border-top:1px solid var(--border); padding:10px 0;">
+      <summary style="cursor:pointer; display:flex; justify-content:space-between; align-items:center; font-weight:600; font-size:13.5px;">
+        <span>${escapeHtml(label)}${day===today?' · hoje':''}</span>
+        <span style="font:600 13px var(--font-mono); color:var(--text-dim);">${fmtMoney(total, currency)}</span>
+      </summary>
+      <div style="margin-top:6px;">${entries.map(renderDayExpenseRow).join('')}</div>
+    </details>`;
+  }).join('');
 }
 
 function ringSvg(pct){
