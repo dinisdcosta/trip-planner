@@ -113,6 +113,7 @@ select:focus, input:focus, textarea:focus{outline:2px solid var(--gold); outline
 .btn-sm{padding:6px 10px; font-size:11px;}
 .icon-btn{background:transparent; border:none; color:var(--text-dim); cursor:pointer; font-size:15px; padding:4px 6px; border-radius:6px;}
 .icon-btn:hover{color:var(--text); background:var(--panel-alt);}
+.card-collapse-btn{font-size:12px; flex:0 0 auto;}
 
 /* ---------- Tabs ---------- */
 .tabs-scroll-wrap{position:relative;}
@@ -1360,6 +1361,26 @@ function escapeHtml(str){
   const d = document.createElement('div'); d.textContent = str==null?'':str; return d.innerHTML;
 }
 
+/* ============================= CARTÕES MINIMIZÁVEIS ============================= */
+// Estado só de sessão (não fica gravado nem sincronizado) — é só uma preferência de
+// visualização, não dados da viagem. O toggle mexe diretamente no DOM (sem re-render nem
+// voltar a pedir dados à rede), para cartões como o do jetlag/tempo que fazem fetch async
+// não ficarem a "piscar" ou a repetir pedidos só por causa de minimizar/expandir.
+const collapsedCards = new Set();
+function cardCollapsed(id){ return collapsedCards.has(id); }
+function toggleCardCollapse(id){
+  const body = document.getElementById(id+'-body');
+  const btn = document.getElementById(id+'-toggle');
+  if(!body) return;
+  const collapsing = body.style.display!=='none';
+  body.style.display = collapsing ? 'none' : '';
+  if(btn) btn.textContent = collapsing ? '▸' : '▾';
+  if(collapsing) collapsedCards.add(id); else collapsedCards.delete(id);
+}
+function cardCollapseBtn(id){
+  return `<button type="button" class="icon-btn card-collapse-btn" id="${id}-toggle" title="Minimizar/expandir" onclick="toggleCardCollapse('${id}')">${cardCollapsed(id)?'▸':'▾'}</button>`;
+}
+
 /* ============================= TAB ROUTER ============================= */
 function renderCurrentTab(){
   const el = document.getElementById('panelContent');
@@ -1496,7 +1517,8 @@ async function loadAndRenderWeather(targetDate, firstDayLabel){
     const boxNow = document.getElementById('weatherBox');
     if(!boxNow) return;
     boxNow.innerHTML = `
-      <div class="flex-head"><h3 class="section-title" style="font-size:15px; margin:0;">🌤️ Previsão do tempo</h3></div>
+      <div class="flex-head"><h3 class="section-title" style="font-size:15px; margin:0;">🌤️ Previsão do tempo</h3>${cardCollapseBtn('weatherBox')}</div>
+      <div id="weatherBox-body" style="${cardCollapsed('weatherBox')?'display:none;':''}">
       <div class="weather-strip">
         ${rows.map((r,i)=>{
           const w = WMO_WEATHER[r.day.code] || {icon:'🌡️', label:''};
@@ -1509,6 +1531,7 @@ async function loadAndRenderWeather(targetDate, firstDayLabel){
             <div class="wd-temp">${Math.round(r.day.max)}°<span class="wd-min">/${Math.round(r.day.min)}°</span></div>
           </div>`;
         }).join('')}
+      </div>
       </div>`;
     boxNow.style.display = '';
   }catch(e){ /* offline ou API indisponível — o cartão fica escondido, sem quebrar a página */ }
@@ -1864,11 +1887,16 @@ function renderJetlagPlanHtml(journey, plan, offsets, originOffset){
   const dirLabel = plan.advancing ? 'avançar — dormir e acordar mais cedo' : 'atrasar — dormir e acordar mais tarde';
   return `
     <div class="flex-head"><h3 class="section-title" style="font-size:15px; margin:0;">🕐 Plano de ajuste de fuso — ${escapeHtml(journeyLabel(journey))}</h3>
-      <button class="btn btn-sm" onclick="dismissJetlag('${journey.firstLeg.id}')">Desativar</button>
+      <div style="display:flex; gap:4px; align-items:center;">
+        <button class="btn btn-sm" onclick="dismissJetlag('${journey.firstLeg.id}')">Desativar</button>
+        ${cardCollapseBtn('jetlagBox')}
+      </div>
     </div>
+    <div id="jetlagBox-body" style="${cardCollapsed('jetlagBox')?'display:none;':''}">
     <p class="check-meta" style="margin:4px 0 12px;">Diferença de ~${Math.round(plan.totalShift)}h entre a partida e o destino final — o objetivo é ${dirLabel}, aos poucos, com o apoio de melatonina/cafeína bem cronometradas. Orientação geral baseada na ciência de resposta circadiana à luz (a mesma base usada por apps como a Timeshifter) — não substitui conselho médico.${plan.leftoverAfterPlan>0.4 ? ` Com um salto tão grande, é normal continuares a sentir algum desajuste depois destes dias.` : ''}</p>
     ${renderJetlagGantt(plan, journey, offsets, originOffset)}
     ${plan.advancing ? '' : `<p class="check-meta" style="margin-top:10px;">Nota: a evidência sobre melatonina é mais forte para adiantar o relógio (viajar para leste) do que para atrasar — por isso não é sugerida aqui.</p>`}
+    </div>
   `;
 }
 async function loadJetlagCard(){
@@ -2012,7 +2040,7 @@ function renderToday(el){
         <div class="list-card"><div class="flex-head"><h3 class="section-title">Falta tratar</h3><button class="btn btn-sm" onclick="openTaskModal()">+ Tarefa</button></div>${renderTaskRows(urgent)}</div>
         <div class="list-card"><div class="flex-head"><h3 class="section-title">Próximas reservas</h3><button class="btn btn-sm" onclick="state.activeTab='reservas';renderTabs();renderCurrentTab()">Ver carteira</button></div>${upcoming.length?upcoming.map(b=>renderAgendaRow({kind:'booking',data:b})).join(''):'<div class="check-meta">Ainda sem reservas guardadas.</div>'}</div>
       </div>
-      <div class="list-card" id="packingListsRoot" style="margin-top:18px"><div class="flex-head"><h3 class="section-title">Listas da mala</h3><button class="btn btn-sm" onclick="openPackingListModal('create')">+ Lista</button></div>${d.packingLists.filter(l=>!l.parentId).map(l=>renderPackingList(l,0)).join('')}</div>
+      <div class="list-card" id="packingListsRoot" style="margin-top:18px"><div class="flex-head"><h3 class="section-title">Listas da mala</h3><div style="display:flex; gap:4px; align-items:center;"><button class="btn btn-sm" onclick="openPackingListModal('create')">+ Lista</button>${cardCollapseBtn('packingListsCard')}</div></div><div id="packingListsCard-body" style="${cardCollapsed('packingListsCard')?'display:none;':''}">${d.packingLists.filter(l=>!l.parentId).map(l=>renderPackingList(l,0)).join('')}</div></div>
       <div class="list-card" style="margin-top:18px"><div class="flex-head"><h3 class="section-title">Ideias e locais por visitar</h3><button class="btn btn-sm" onclick="state.activeTab='roteiro';renderTabs();renderCurrentTab()">Ver todos</button></div>${ideas.length?ideas.map(renderInterestRow).join(''):'<div class="check-meta">Adiciona locais sem data para teres uma lista flexível de ideias.</div>'}</div>`;
     bindPackingDragHandles();
     loadAndRenderWeather(info.startDate, 'Previsão p/ chegada');
@@ -2097,7 +2125,7 @@ function renderPreparation(el){
  el.innerHTML=`<div class="flex-head"><div><h2 class="section-title" style="margin-bottom:4px">Preparação</h2><div class="check-meta">Tarefas e malas são opcionais e funcionam totalmente offline.</div></div><button class="btn btn-primary" onclick="openTaskModal()">+ Tarefa</button></div>
  <div class="list-card" id="packingWeatherTip" style="display:none; margin-top:20px;"></div>
  <div class="chart-row" style="margin-top:20px"><div class="list-card"><div class="flex-head"><h3 class="section-title">Falta tratar</h3></div>${renderTaskRows(pending)}${done.length?`<details style="margin-top:12px"><summary class="check-meta">${done.length} concluída(s)</summary>${renderTaskRows(done)}</details>`:''}</div>
- <div class="list-card" id="packingListsRoot"><div class="flex-head"><h3 class="section-title">Listas da mala</h3><button class="btn btn-sm" onclick="openPackingListModal('create')">+ Lista</button></div><div class="check-meta" style="margin-bottom:10px;">Arrasta o ⠿ de uma lista para dentro de outra para a tornar numa sub-lista.</div>${roots.map(l=>renderPackingList(l,0)).join('')}</div></div>`;
+ <div class="list-card" id="packingListsRoot"><div class="flex-head"><h3 class="section-title">Listas da mala</h3><div style="display:flex; gap:4px; align-items:center;"><button class="btn btn-sm" onclick="openPackingListModal('create')">+ Lista</button>${cardCollapseBtn('packingListsCard')}</div></div><div id="packingListsCard-body" style="${cardCollapsed('packingListsCard')?'display:none;':''}"><div class="check-meta" style="margin-bottom:10px;">Arrasta o ⠿ de uma lista para dentro de outra para a tornar numa sub-lista.</div>${roots.map(l=>renderPackingList(l,0)).join('')}</div></div></div>`;
  bindPackingDragHandles();
  loadPackingWeatherTip();
 }
@@ -2354,9 +2382,11 @@ function renderDashboard(el){
     </div>
 
     <div class="list-card" style="margin-top:20px;">
-      <h3 class="section-title" style="margin-bottom:6px;">Despesas por dia</h3>
+      <div class="flex-head"><h3 class="section-title" style="margin-bottom:6px;">Despesas por dia</h3>${cardCollapseBtn('dayByDayExp')}</div>
+      <div id="dayByDayExp-body" style="${cardCollapsed('dayByDayExp')?'display:none;':''}">
       <p style="color:var(--text-dim); font-size:12.5px; margin:0 0 6px;">Inclui a quota diária de despesas que cobrem vários dias (ex: seguro de viagem, alojamento).</p>
       ${renderDayByDayExpenses()}
+      </div>
     </div>
   `;
 
