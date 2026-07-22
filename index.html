@@ -380,8 +380,6 @@ select:focus, input:focus, textarea:focus{outline:2px solid var(--gold); outline
 .jg-marker{position:absolute; top:-14px; transform:translateX(-50%); font-size:13px; z-index:3; cursor:default;}
 .jg-marker.jg-flight-marker{top:auto; bottom:-15px; font-size:11px;}
 .jg-header-row .jg-track{background:transparent; border:none; height:16px; overflow:visible;}
-.jg-header-row.jg-ruler-bottom{margin-top:4px;}
-.jg-ruler-caption{font-size:9px; opacity:.75;}
 .jg-ruler{position:relative;}
 .jg-hour-mark{position:absolute; top:0; font:8px var(--font-mono); color:var(--text-dim); transform:translateX(-50%); opacity:.7;}
 .jg-hour-mark.jg-hour-mark-strong{font-size:9.5px; opacity:1; font-weight:600;}
@@ -1675,22 +1673,11 @@ async function findJetlagCandidate(){
     const from = getLocationById(j.firstLeg.locationId), to = getLocationById(j.lastLeg.arrivalLocationId);
     if(!from || !to || from.lat==null || to.lat==null) continue;
     try{
-      // Vai buscar o fuso de TODOS os aeroportos da viagem (não só origem/destino final) —
-      // uma escala como Istambul também tem fuso próprio, e os horários dos voos precisam
-      // de ser convertidos em relação a esse fuso, não ao de origem ou destino.
-      const uniqueLocIds = new Set();
-      j.legs.forEach(leg=>{ uniqueLocIds.add(leg.locationId); uniqueLocIds.add(leg.arrivalLocationId); });
-      const offsets = {};
-      await Promise.all([...uniqueLocIds].map(async id=>{
-        const loc = getLocationById(id);
-        if(loc && loc.lat!=null) offsets[id] = await getUtcOffsetHours(loc.lat, loc.lon);
-      }));
-      const offA = offsets[j.firstLeg.locationId], offB = offsets[j.lastLeg.arrivalLocationId];
-      if(offA==null || offB==null) continue;
+      const [offA, offB] = await Promise.all([getUtcOffsetHours(from.lat, from.lon), getUtcOffsetHours(to.lat, to.lon)]);
       let diff = offB - offA;
       if(diff > 12) diff -= 24; if(diff < -12) diff += 24;
       if(Math.abs(diff) < JETLAG_TZ_THRESHOLD_HOURS) continue;
-      if(dayDiff < bestDayDiff){ bestDayDiff = dayDiff; best = {journey:j, diffHours:diff, offsets, originOffset:offA}; }
+      if(dayDiff < bestDayDiff){ bestDayDiff = dayDiff; best = {journey:j, diffHours:diff}; }
     }catch(e){ /* sem internet ou API indisponível — tenta a próxima viagem */ }
   }
   return best;
@@ -1779,18 +1766,17 @@ const JETLAG_HOUR_MARKS = Array.from({length:25}, (_,i)=>i);
 function jetlagHourGridlines(){
   return JETLAG_HOUR_MARKS.map(h=>`<div class="jg-gridline${h%6===0?' jg-gridline-strong':''}" style="left:${(h/24)*100}%"></div>`).join('');
 }
-function jetlagFlightVisualsForDate(journey, date, offsets, originOffset){
+function jetlagFlightVisualsForDate(journey, date){
   const segs = [], markers = [];
-  if(!journey || !offsets || originOffset==null) return {segs, markers};
+  if(!journey) return {segs, markers};
   journey.legs.forEach(leg=>{
     const depDate = leg.dateFrom, arrDate = leg.dateTo || leg.dateFrom;
-    const depOffset = offsets[leg.locationId], arrOffset = offsets[leg.arrivalLocationId];
-    // Cada aeroporto (incluindo escalas intermédias, ex: Istambul) tem o seu próprio fuso —
-    // converte-se sempre a hora local de cada ponta para a posição equivalente no eixo de
-    // origem, e não só a chegada final. Sem isto uma escala com fuso diferente ficava
-    // desalinhada no gráfico.
-    const depPct = (leg.timeFrom && depOffset!=null) ? hhmmToPct(jetlagShiftTime(leg.timeFrom, originOffset-depOffset)) : null;
-    const arrPct = (leg.timeTo && arrOffset!=null) ? hhmmToPct(jetlagShiftTime(leg.timeTo, originOffset-arrOffset)) : null;
+    // Cada linha mostra a hora local do fuso relevante nesse ponto da viagem — a partida e a
+    // chegada ficam marcadas na hora local de cada aeroporto, sem tentar converter tudo para
+    // um único eixo partilhado (é mais simples e não desalinha quando há mais do que um fuso
+    // envolvido, ex: uma escala com fuso diferente da origem e do destino).
+    const depPct = leg.timeFrom ? hhmmToPct(leg.timeFrom) : null;
+    const arrPct = leg.timeTo ? hhmmToPct(leg.timeTo) : null;
     const departsToday = depDate===date && depPct!=null;
     const arrivesToday = arrDate===date && arrPct!=null;
     if(departsToday && arrivesToday){
@@ -1804,7 +1790,7 @@ function jetlagFlightVisualsForDate(journey, date, offsets, originOffset){
   });
   return {segs, markers};
 }
-function jetlagGanttRow(d, advancing, journey, offsets, originOffset){
+function jetlagGanttRow(d, advancing, journey){
   const wakePct = hhmmToPct(d.wake), bedPct = hhmmToPct(d.bed);
   // Normalmente o deitar (noite) fica depois do acordar (manhã) no relógio de 24h, e o sono
   // "parte" o dia em dois bocados (fim da noite anterior + início desta noite). Mas com
@@ -1825,19 +1811,15 @@ function jetlagGanttRow(d, advancing, journey, offsets, originOffset){
   if(advancing) markers.push({cls:'jg-melatonin', pct:hhmmToPct(jetlagShiftTime(d.bed,-1.5)), icon:'💊', title:`Melatonina por volta das ${jetlagShiftTime(d.bed,-1.5)} — cerca de 1h30 antes de deitar (opcional, confirma com médico/farmacêutico)`});
   const isTravelDay = d.phase==='travel';
   const isArrivalDay = d.phase==='arrival' && d.stops!=null;
-  const flightVisuals = jetlagFlightVisualsForDate(journey, d.date, offsets, originOffset);
+  const flightVisuals = jetlagFlightVisualsForDate(journey, d.date);
   segs.push(...flightVisuals.segs);
   markers.push(...flightVisuals.markers);
   const label = d.phase==='prep' ? 'antes' : isTravelDay ? 'viagem' : (isArrivalDay ? 'chegada' : 'destino');
-  const stopsTxt = d.stops>0 ? ` (${d.stops} escala${d.stops>1?'s':''})` : '';
   // Quando o período de sono recomendado cai em cima do próprio voo, deixa isso claro — não
   // é um erro, é a sugestão de tentar dormir a bordo nessa janela; sem a nota parece que o
   // gráfico está a mandar dormir a meio da viagem sem mais explicação.
   const sleepOverlapsFlight = flightVisuals.segs.some(fs => sleepSegs.some(ss => pctRangesOverlap(fs.range, ss.range)));
-  const sleepNote = sleepOverlapsFlight ? ' · 💤 o período de sono cai durante o voo — tenta adiantá-lo a bordo, se o voo permitir' : '';
-  let noteRow = '';
-  if(isTravelDay) noteRow = `<div class="jg-row jg-note-row"><div class="jg-row-label"></div><div class="jg-arrival-note">✈️ Ainda a caminho do destino final${stopsTxt}${sleepNote}</div></div>`;
-  else if(isArrivalDay) noteRow = `<div class="jg-row jg-note-row"><div class="jg-row-label"></div><div class="jg-arrival-note">✈️ Chegas hoje ao destino final${stopsTxt}${sleepNote}</div></div>`;
+  const noteRow = sleepOverlapsFlight ? `<div class="jg-row jg-note-row"><div class="jg-row-label"></div><div class="jg-arrival-note">💤 o período de sono cai durante o voo — tenta adiantá-lo a bordo, se o voo permitir</div></div>` : '';
   return `<div class="jg-row">
     <div class="jg-row-label">${fmtDateShort(d.date)}<div class="jg-row-sub">${label}</div></div>
     <div class="jg-track">
@@ -1847,12 +1829,6 @@ function jetlagGanttRow(d, advancing, journey, offsets, originOffset){
     </div>
   </div>${noteRow}`;
 }
-function formatJetlagHourMark(h){
-  const wrapped = ((h % 24) + 24) % 24;
-  const whole = Math.floor(wrapped + 1e-9);
-  const frac = wrapped - whole;
-  return frac < 0.01 ? `${whole}` : `${whole}:${String(Math.round(frac*60)).padStart(2,'0')}`;
-}
 function jetlagHourMarkStyle(pct){
   // Nas pontas (0h e 24h) centrar o texto (translateX -50%) empurra metade para fora da
   // faixa e corta-o — ancora-se pelo lado interior nessas duas marcas.
@@ -1860,30 +1836,25 @@ function jetlagHourMarkStyle(pct){
   if(pct>=99.99) return `left:100%; transform:translateX(-100%)`;
   return `left:${pct}%;`;
 }
-function renderJetlagGantt(plan, journey, offsets, originOffset){
-  const originMarks = JETLAG_HOUR_MARKS.map(h=>({pct:(h/24)*100, label:h, strong:h%6===0}));
-  const destMarks = JETLAG_HOUR_MARKS.map(h=>({pct:(h/24)*100, label:formatJetlagHourMark(h+plan.diffHours), strong:h%6===0}));
+function renderJetlagGantt(plan, journey){
+  const hourMarks = JETLAG_HOUR_MARKS.map(h=>({pct:(h/24)*100, label:h, strong:h%6===0}));
   return `<div class="jetlag-gantt">
     <div class="jg-row jg-header-row">
-      <div class="jg-row-label jg-ruler-caption">origem</div>
-      <div class="jg-track jg-ruler">${originMarks.map(m=>`<span class="jg-hour-mark${m.strong?' jg-hour-mark-strong':''}" style="${jetlagHourMarkStyle(m.pct)}">${m.label}</span>`).join('')}</div>
+      <div class="jg-row-label"></div>
+      <div class="jg-track jg-ruler">${hourMarks.map(m=>`<span class="jg-hour-mark${m.strong?' jg-hour-mark-strong':''}" style="${jetlagHourMarkStyle(m.pct)}">${m.label}</span>`).join('')}</div>
     </div>
-    ${plan.days.map(d=>jetlagGanttRow(d, plan.advancing, journey, offsets, originOffset)).join('')}
-    <div class="jg-row jg-header-row jg-ruler-bottom">
-      <div class="jg-row-label jg-ruler-caption">destino</div>
-      <div class="jg-track jg-ruler">${destMarks.map(m=>`<span class="jg-hour-mark${m.strong?' jg-hour-mark-strong':''}" style="${jetlagHourMarkStyle(m.pct)}">${m.label}</span>`).join('')}</div>
-    </div>
+    ${plan.days.map(d=>jetlagGanttRow(d, plan.advancing, journey)).join('')}
     <div class="jg-legend">
       <span><i class="jg-swatch jg-sleep"></i>Dormir</span>
       <span><i class="jg-swatch jg-seek"></i>Procura luz forte</span>
       <span><i class="jg-swatch jg-avoid"></i>Evita luz forte</span>
-      <span><i class="jg-swatch jg-flight"></i>Voo (🛫 parte · 🛬 chega)</span>
+      <span><i class="jg-swatch jg-flight"></i>Voo (🛫 parte · 🛬 chega, hora local)</span>
       <span>☕ Corte de cafeína</span>
       ${plan.advancing ? `<span>💊 Melatonina (opcional)</span>` : ''}
     </div>
   </div>`;
 }
-function renderJetlagPlanHtml(journey, plan, offsets, originOffset){
+function renderJetlagPlanHtml(journey, plan){
   const dirLabel = plan.advancing ? 'avançar — dormir e acordar mais cedo' : 'atrasar — dormir e acordar mais tarde';
   return `
     <div class="flex-head"><h3 class="section-title" style="font-size:15px; margin:0;">🕐 Plano de ajuste de fuso — ${escapeHtml(journeyLabel(journey))}</h3>
@@ -1894,7 +1865,7 @@ function renderJetlagPlanHtml(journey, plan, offsets, originOffset){
     </div>
     <div id="jetlagBox-body" style="${cardCollapsed('jetlagBox')?'display:none;':''}">
     <p class="check-meta" style="margin:4px 0 12px;">Diferença de ~${Math.round(plan.totalShift)}h entre a partida e o destino final — o objetivo é ${dirLabel}, aos poucos, com o apoio de melatonina/cafeína bem cronometradas. Orientação geral baseada na ciência de resposta circadiana à luz (a mesma base usada por apps como a Timeshifter) — não substitui conselho médico.${plan.leftoverAfterPlan>0.4 ? ` Com um salto tão grande, é normal continuares a sentir algum desajuste depois destes dias.` : ''}</p>
-    ${renderJetlagGantt(plan, journey, offsets, originOffset)}
+    ${renderJetlagGantt(plan, journey)}
     ${plan.advancing ? '' : `<p class="check-meta" style="margin-top:10px;">Nota: a evidência sobre melatonina é mais forte para adiantar o relógio (viajar para leste) do que para atrasar — por isso não é sugerida aqui.</p>`}
     </div>
   `;
@@ -1907,7 +1878,7 @@ async function loadJetlagCard(){
     const boxNow = document.getElementById('jetlagBox');
     if(!boxNow) return;
     if(!candidate){ boxNow.style.display='none'; return; }
-    const { journey, diffHours, offsets, originOffset } = candidate;
+    const { journey, diffHours } = candidate;
     const journeyKey = journey.firstLeg.id;
     if(state.currentData.jetlagOptIn[journeyKey]!==true){
       const dir = diffHours>0 ? 'avançar' : 'atrasar';
@@ -1923,7 +1894,7 @@ async function loadJetlagCard(){
     }
     const wakeTime = localStorage.getItem('travel-habitual-wake') || '07:00';
     const plan = computeJetlagPlan(journey, diffHours, wakeTime);
-    boxNow.innerHTML = renderJetlagPlanHtml(journey, plan, offsets, originOffset);
+    boxNow.innerHTML = renderJetlagPlanHtml(journey, plan);
     boxNow.style.display = '';
   }catch(e){ /* offline ou API indisponível — o cartão fica escondido, sem quebrar a página */ }
 }
